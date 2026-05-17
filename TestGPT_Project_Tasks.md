@@ -19,7 +19,7 @@
 ## Phase 1 — Project Setup & Architecture
 
 - [x] 1.1 Define and agree on the technology stack (frontend, backend, AI API)
-- [ ] 1.2 Set up version control repository (Git) with branching strategy (e.g. main / dev / feature branches)
+- [x] 1.2 Set up version control repository (Git) with branching strategy (e.g. main / dev / feature branches)
 - [x] 1.3 Define folder structure and project conventions (naming, formatting, linting)
 - [x] 1.4 Set up development environment (local setup guide / README)
 - [x] 1.8 Identify and document the generative AI API to be used (e.g. Anthropic Claude, OpenAI)
