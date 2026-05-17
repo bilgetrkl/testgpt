@@ -1,0 +1,87 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-base:     #FEF0EC;
+  --bg-surface:  #FFFCFA;
+  --bg-elevated: #FFFCFA;
+  --bg-code:     #FDE8E0;
+  --bg-hover:    rgba(0,0,0,0.04);
+
+  --text-primary:   #2D1A14;
+  --text-secondary: #7C5A52;
+  --text-muted:     #B08880;
+
+  --border:       #F0D5CC;
+  --border-input: #E8C5BB;
+  --border-focus: #C8445D;
+
+  --accent:       #C8445D;
+  --accent-dark:  #A83550;
+  --accent-light: rgba(200,68,93,0.1);
+  --accent-text:  #FFFFFF;
+
+  --shadow-sm: 0 1px 3px rgba(180,80,60,0.08), 0 1px 2px rgba(180,80,60,0.04);
+  --shadow-md: 0 4px 16px rgba(180,80,60,0.1), 0 2px 4px rgba(180,80,60,0.05);
+
+  --kw-feature:  #7C3AED;
+  --kw-scenario: #9D174D;
+  --kw-given:    #065F46;
+  --kw-when:     #92400E;
+  --kw-then:     #0E7490;
+  --kw-and:      #7C3AED;
+  --kw-but:      #991B1B;
+
+  --navbar-bg: rgba(254,240,236,0.92);
+
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  color: var(--text-primary);
+  background: var(--bg-base);
+}
+
+[data-theme="dark"] {
+  --bg-base:     #18181B;
+  --bg-surface:  #1C1C1E;
+  --bg-elevated: #252528;
+  --bg-code:     #1E1E2E;
+  --bg-hover:    rgba(255,255,255,0.05);
+
+  --text-primary:   #F9FAFB;
+  --text-secondary: #9CA3AF;
+  --text-muted:     #6B7280;
+
+  --border:       #2E2E32;
+  --border-input: #3F3F46;
+  --border-focus: #FCD34D;
+
+  --accent:       #F59E0B;
+  --accent-dark:  #D97706;
+  --accent-light: rgba(245,158,11,0.15);
+  --accent-text:  #1C1400;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.4);
+
+  --kw-feature:  #A78BFA;
+  --kw-scenario: #F472B6;
+  --kw-given:    #34D399;
+  --kw-when:     #FCD34D;
+  --kw-then:     #22D3EE;
+  --kw-and:      #A78BFA;
+  --kw-but:      #F87171;
+
+  --navbar-bg: rgba(24,24,27,0.92);
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+#root { min-height: 100vh; display: flex; flex-direction: column; }
