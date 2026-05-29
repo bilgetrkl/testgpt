@@ -715,5 +715,671 @@
   to { transform: scale(1); opacity: 1; }
 }
 
+/* ── Phase 4 Scenario Cards & Editing Styles ────────────────── */
+.scenarios-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: fadeSlideUp 0.35s ease;
+}
 
+.scenarios-filter-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+  overflow-x: auto;
+}
 
+.filter-tab-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.filter-tab-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.filter-tab-btn.active {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.scenarios-cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.scenario-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.scenario-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Color codes for scenario types */
+.scenario-card-happy-path {
+  border-left: 4px solid var(--kw-given);
+}
+.scenario-card-edge-case {
+  border-left: 4px solid var(--kw-when);
+}
+.scenario-card-negative {
+  border-left: 4px solid var(--kw-but);
+}
+.scenario-card-other {
+  border-left: 4px solid var(--text-muted);
+}
+
+.scenario-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.scenario-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scenario-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scenario-badge {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 3px 8px;
+  border-radius: 12px;
+}
+
+.badge-happy-path {
+  background: #ECFDF5;
+  color: #065F46;
+}
+.badge-edge-case {
+  background: #FEF3C7;
+  color: #92400E;
+}
+.badge-negative {
+  background: #FEF2F2;
+  color: #991B1B;
+}
+.badge-other {
+  background: var(--bg-base);
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .badge-happy-path {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34D399;
+}
+[data-theme="dark"] .badge-edge-case {
+  background: rgba(252, 211, 77, 0.15);
+  color: #FCD34D;
+}
+[data-theme="dark"] .badge-negative {
+  background: rgba(248, 113, 113, 0.15);
+  color: #F87171;
+}
+[data-theme="dark"] .badge-other {
+  background: rgba(156, 163, 175, 0.15);
+  color: #D1D5DB;
+}
+
+.scenario-tags {
+  display: flex;
+  gap: 4px;
+}
+
+.scenario-tag {
+  font-size: 10.5px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.traceability-badge {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.traceability-link {
+  cursor: pointer;
+  text-decoration: none;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1;
+  transition: all 0.15s ease;
+  outline: none;
+}
+
+.traceability-link:hover {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: translateY(-0.5px);
+}
+
+.btn-card-edit, .btn-card-delete {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.5;
+  transition: opacity 0.15s, transform 0.1s;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-card-edit:hover, .btn-card-delete:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.btn-card-delete:hover {
+  color: #EF4444;
+}
+
+.scenario-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.scenario-steps {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.scenario-steps-pre {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
+/* Inline editing state styles */
+.scenario-card-editing {
+  border: 1.5px dashed var(--border-focus);
+  background: var(--bg-surface);
+  transform: none !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+.scenario-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scenario-edit-label {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.scenario-edit-input, .scenario-edit-textarea {
+  font-family: inherit;
+  font-size: 13.5px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-input);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.scenario-edit-textarea {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.scenario-edit-input:focus, .scenario-edit-textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.scenario-type-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scenario-type-btn {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-input);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.scenario-type-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.scenario-type-btn.active {
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.btn-type-happy-path.active {
+  background: var(--kw-given);
+  border-color: var(--kw-given);
+  color: #fff;
+}
+.btn-type-edge-case.active {
+  background: var(--kw-when);
+  border-color: var(--kw-when);
+  color: #fff;
+}
+.btn-type-negative.active {
+  background: var(--kw-but);
+  border-color: var(--kw-but);
+  color: #fff;
+}
+
+.scenario-card-actions, .scenarios-footer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.scenarios-footer-actions {
+  justify-content: center;
+  padding: 8px 0;
+  border-top: 1px dashed var(--border);
+}
+
+.btn-add-scenario {
+  width: 100%;
+  justify-content: center;
+  border-style: dashed !important;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.btn-add-scenario:hover {
+  border-style: solid !important;
+  color: var(--accent) !important;
+  background: var(--accent-light) !important;
+  border-color: var(--accent) !important;
+}
+
+.btn-sm {
+  padding: 5px 12px !important;
+  font-size: 12px !important;
+  border-radius: 6px !important;
+}
+
+.empty-scenarios-filter {
+  text-align: center;
+  padding: 32px 16px;
+  background: var(--bg-hover);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* ── Phase 5 Refinement & Diff View Styles ───────────────────── */
+
+.btn-add-more-ai {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-input);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+.btn-add-more-ai:hover {
+  background: var(--accent-light);
+  border-color: var(--accent);
+  color: var(--accent);
+  border-style: solid;
+}
+
+.scenario-card-footer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.btn-quick-action {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+.btn-quick-action:hover {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.refinement-chat-container {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.refinement-chat-heading {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.refinement-chat-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.refinement-chat-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.refinement-chat-textarea {
+  flex: 1;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.refinement-chat-textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.btn-refine-send {
+  flex-shrink: 0;
+  justify-content: center;
+  align-self: center;
+  height: 100%;
+  padding: 12px 18px;
+}
+
+/* Diff View Styles */
+.btn-diff-toggle {
+  background: transparent;
+  border: 1px solid var(--border-input);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: 8px;
+  transition: all 0.15s ease;
+}
+
+.btn-diff-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.btn-diff-toggle.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.diff-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.diff-view-heading {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-lines-list {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.diff-pre {
+  margin: 0;
+  padding: 12px 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+.diff-line {
+  display: flex;
+  padding: 2px 16px;
+  white-space: pre-wrap;
+}
+
+.diff-line-marker {
+  width: 20px;
+  flex-shrink: 0;
+  font-weight: 700;
+  user-select: none;
+}
+
+.diff-line-added {
+  background: rgba(52, 211, 153, 0.15);
+  color: #065F46;
+}
+[data-theme="dark"] .diff-line-added {
+  background: rgba(52, 211, 153, 0.1);
+  color: #A7F3D0;
+}
+
+.diff-line-removed {
+  background: rgba(248, 113, 113, 0.15);
+  color: #991B1B;
+}
+[data-theme="dark"] .diff-line-removed {
+  background: rgba(248, 113, 113, 0.1);
+  color: #FCA5A5;
+}
+
+.diff-line-unchanged {
+  color: var(--text-primary);
+}
+
+/* --- Added Upgrades (Phase 5.1 & Scenario Targeting) --- */
+.output-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-regenerate-badge {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-input);
+  color: var(--accent);
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+}
+
+.btn-regenerate-badge:hover:not(:disabled) {
+  background: var(--accent-light);
+  border-color: var(--accent);
+}
+
+.btn-regenerate-badge:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scenario-number-badge {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-text);
+  text-transform: uppercase;
+}
+
+/* Autocomplete Suggestion Dropdown */
+.chat-autocomplete-dropdown {
+  position: absolute;
+  bottom: calc(100% - 12px);
+  left: 20px;
+  width: calc(100% - 40px);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  max-height: 180px;
+  overflow-y: auto;
+  z-index: 10;
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-autocomplete-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.chat-autocomplete-item:hover,
+.chat-autocomplete-item.active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.autocomplete-badge {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: var(--accent-light);
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.autocomplete-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
