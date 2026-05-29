@@ -28,6 +28,170 @@ function GherkinBlock({ text }) {
   )
 }
 
+// ── Gherkin Parser & Serializer Functions ────────────────────
+function parseGherkin(text) {
+  if (!text) return { featureHeader: "", scenarios: [] };
+  const lines = text.split("\n");
+  let featureHeaderLines = [];
+  let scenarios = [];
+  let currentScenario = null;
+  let currentTags = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("@")) {
+      const tagsInLine = trimmed.split(/\s+/).filter(t => t.startsWith("@"));
+      currentTags.push(...tagsInLine);
+      continue;
+    }
+
+    if (trimmed.startsWith("Scenario:") || trimmed.startsWith("Scenario Outline:")) {
+      if (currentScenario) {
+        while (currentScenario.steps.length > 0 && currentScenario.steps[currentScenario.steps.length - 1].trim() === "") {
+          currentScenario.steps.pop();
+        }
+        scenarios.push(currentScenario);
+      }
+      const isOutline = trimmed.startsWith("Scenario Outline:");
+      const prefix = isOutline ? "Scenario Outline:" : "Scenario:";
+      const title = trimmed.substring(prefix.length).trim();
+
+      const traceTag = currentTags.find(tag => /^@REQ-?[a-zA-Z0-9_-]+$/i.test(tag));
+      let traceId = null;
+      if (traceTag) {
+        const cleaned = traceTag.substring(1).toUpperCase();
+        traceId = cleaned.startsWith("REQ-") ? cleaned : `REQ-${cleaned.replace("REQ", "")}`;
+      }
+
+      currentScenario = {
+        id: `sc-${scenarios.length}-${title.replace(/[^a-zA-Z0-9]/g, "").slice(0, 15).toLowerCase()}`,
+        title: title,
+        isOutline: isOutline,
+        tags: [...currentTags],
+        traceId: traceId,
+        steps: [],
+        type: determineScenarioType(title, currentTags)
+      };
+      currentTags = [];
+      continue;
+    }
+
+    if (!currentScenario) {
+      featureHeaderLines.push(line);
+    } else {
+      currentScenario.steps.push(line);
+    }
+  }
+
+  if (currentScenario) {
+    while (currentScenario.steps.length > 0 && currentScenario.steps[currentScenario.steps.length - 1].trim() === "") {
+      currentScenario.steps.pop();
+    }
+    scenarios.push(currentScenario);
+  }
+
+  return {
+    featureHeader: featureHeaderLines.join("\n"),
+    scenarios: scenarios
+  };
+}
+
+function determineScenarioType(title, tags) {
+  const allTagsText = tags.join(" ").toLowerCase();
+  const titleLower = title.toLowerCase();
+
+  if (allTagsText.includes("happy") || allTagsText.includes("success")) return "happy-path";
+  if (allTagsText.includes("edge") || allTagsText.includes("boundary")) return "edge-case";
+  if (allTagsText.includes("negative") || allTagsText.includes("fail") || allTagsText.includes("error")) return "negative";
+
+  if (titleLower.includes("happy path") || titleLower.includes("successful") || titleLower.includes("happy-path")) return "happy-path";
+  if (titleLower.includes("edge case") || titleLower.includes("boundary") || titleLower.includes("edge-case")) return "edge-case";
+  if (titleLower.includes("negative") || titleLower.includes("fail") || titleLower.includes("error") || titleLower.includes("invalid")) return "negative";
+
+  return "other";
+}
+
+function syncTagsForType(tags, type) {
+  let newTags = tags.filter(t => 
+    t !== "@happy-path" && t !== "@happy_path" && t !== "@happy" &&
+    t !== "@edge-case" && t !== "@edge_case" && t !== "@edge" &&
+    t !== "@negative" && t !== "@negative-scenario" && t !== "@negative_scenario"
+  );
+  
+  if (type === "happy-path") newTags.push("@happy-path");
+  else if (type === "edge-case") newTags.push("@edge-case");
+  else if (type === "negative") newTags.push("@negative");
+  
+  return newTags;
+}
+
+function serializeGherkin(featureHeader, scenarios) {
+  let text = "";
+  if (featureHeader) {
+    text += featureHeader.trimEnd() + "\n\n";
+  }
+
+  scenarios.forEach(sc => {
+    if (sc.tags && sc.tags.length > 0) {
+      text += "  " + sc.tags.join(" ") + "\n";
+    }
+    const prefix = sc.isOutline ? "Scenario Outline" : "Scenario";
+    text += `  ${prefix}: ${sc.title}\n`;
+    if (sc.steps && sc.steps.length > 0) {
+      sc.steps.forEach(step => {
+        const trimmedStep = step.trim();
+        if (trimmedStep) {
+          text += `    ${trimmedStep}\n`;
+        } else {
+          text += "\n";
+        }
+      });
+    }
+    text += "\n";
+  });
+  return text.trim() + "\n";
+}
+
+// ── LCS Line-by-line Gherkin Diff Engine (Phase 5.6) ──────────
+function computeLineDiff(original, current) {
+  const origLines = (original || "").split("\n");
+  const currLines = (current || "").split("\n");
+
+  const dp = Array(origLines.length + 1).fill(null).map(() => Array(currLines.length + 1).fill(0));
+
+  for (let i = 1; i <= origLines.length; i++) {
+    for (let j = 1; j <= currLines.length; j++) {
+      if (origLines[i - 1].trim() === currLines[j - 1].trim()) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  let i = origLines.length;
+  let j = currLines.length;
+  const diff = [];
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && origLines[i - 1].trim() === currLines[j - 1].trim()) {
+      diff.unshift({ type: "unchanged", text: currLines[j - 1] });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      diff.unshift({ type: "added", text: currLines[j - 1] });
+      j--;
+    } else {
+      diff.unshift({ type: "removed", text: origLines[i - 1] });
+      i--;
+    }
+  }
+
+  return diff;
+}
+
 // ── Skeleton ──────────────────────────────────────────────────
 function Skeleton() {
   return (
@@ -62,6 +226,7 @@ function Toast({ message, type, onClose }) {
 
 // ── Session title helper ──────────────────────────────────────
 function sessionTitle(requirements, index) {
+  /* eslint-disable-next-line no-useless-escape */
   const firstLine = requirements.trim().split("\n")[0].replace(/^\d+[\.\)]\s*/, "").trim()
   return firstLine.length > 36 ? firstLine.slice(0, 36) + "…" : firstLine || `Session ${index + 1}`
 }
@@ -71,6 +236,7 @@ function sanitizeInput(text) {
   if (!text) return ""
   
   // 1. Remove dangerous control/non-printable ASCII characters (keep newlines/tabs)
+  /* eslint-disable-next-line no-control-regex */
   let clean = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "")
 
   // 2. Strip script tags entirely to prevent prompt injection XSS
@@ -102,6 +268,193 @@ function isValidGherkin(text) {
   )
 }
 
+// ── Scenario Card Component ──────────────────────────────────
+function ScenarioCard({ 
+  scenario, 
+  requirementIndex,
+  isEditing, 
+  onEdit, 
+  onSave, 
+  onCancel, 
+  onDelete,
+  onQuickAction,
+  onTraceClick,
+  scenarioIndex
+}) {
+  const [editedTitle, setEditedTitle] = useState(scenario.title);
+  const [editedSteps, setEditedSteps] = useState(scenario.steps.join("\n"));
+  const [editedType, setEditedType] = useState(scenario.type);
+
+  // Sync state when entering edit mode
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (isEditing) {
+      setEditedTitle(scenario.title);
+      setEditedSteps(scenario.steps.join("\n"));
+      setEditedType(scenario.type);
+    }
+  }, [isEditing, scenario]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const handleSave = () => {
+    onSave(scenario.id, {
+      title: editedTitle.trim(),
+      steps: editedSteps.split("\n"),
+      type: editedType
+    });
+  };
+
+  const badgeText = {
+    "happy-path": "Happy Path",
+    "edge-case": "Edge Case",
+    "negative": "Negative Scenario",
+    "other": "Other"
+  }[scenario.type] || "Other";
+
+  const displayTags = (scenario.tags || []).filter(t => {
+    const lower = t.toLowerCase();
+    return !lower.startsWith("@req") && 
+           lower !== "@happy-path" && lower !== "@happy_path" && lower !== "@happy" &&
+           lower !== "@edge-case" && lower !== "@edge_case" && lower !== "@edge" &&
+           lower !== "@negative" && lower !== "@negative-scenario" && lower !== "@negative_scenario";
+  });
+
+  if (isEditing) {
+    return (
+      <div className="scenario-card scenario-card-editing">
+        <div className="scenario-edit-field">
+          <label className="scenario-edit-label">Scenario Title</label>
+          <input
+            type="text"
+            className="scenario-edit-input"
+            value={editedTitle}
+            onChange={e => setEditedTitle(e.target.value)}
+            placeholder="e.g. Successful login"
+          />
+        </div>
+        
+        <div className="scenario-edit-field">
+          <label className="scenario-edit-label">Category</label>
+          <div className="scenario-type-buttons">
+            {["happy-path", "edge-case", "negative"].map(t => (
+              <button
+                key={t}
+                type="button"
+                className={`scenario-type-btn btn-type-${t} ${editedType === t ? "active" : ""}`}
+                onClick={() => setEditedType(t)}
+              >
+                {t === "happy-path" && "Happy Path"}
+                {t === "edge-case" && "Edge Case"}
+                {t === "negative" && "Negative"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="scenario-edit-field">
+          <label className="scenario-edit-label">Steps (Gherkin format)</label>
+          <textarea
+            className="scenario-edit-textarea"
+            value={editedSteps}
+            onChange={e => setEditedSteps(e.target.value)}
+            rows={8}
+            placeholder={"Given the user is on the login page\nWhen the user enters valid credentials\nThen the user should see the dashboard"}
+          />
+        </div>
+
+        <div className="scenario-card-actions">
+          <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={!editedTitle.trim()}>
+            Save
+          </button>
+          <button className="btn btn-outline btn-sm" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`scenario-card scenario-card-${scenario.type}`}>
+      <div className="scenario-card-header">
+        <div className="scenario-header-left">
+          <span className="scenario-number-badge">
+            SCENARIO #{scenarioIndex}
+          </span>
+          <span className={`scenario-badge badge-${scenario.type}`}>
+            {badgeText}
+          </span>
+          {displayTags.length > 0 && (
+            <div className="scenario-tags">
+              {displayTags.map((tag, idx) => (
+                <span key={idx} className="scenario-tag">{tag}</span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="scenario-header-right">
+          <button 
+            className="traceability-badge traceability-link" 
+            onClick={() => onTraceClick(scenario.traceId || `REQ-${requirementIndex}`)}
+            title={`Click to highlight requirement ${scenario.traceId || `REQ-${requirementIndex}`} in left panel`}
+          >
+            🔗 Traces to {scenario.traceId || `REQ-${requirementIndex}`}
+          </button>
+          <button 
+            className="btn-card-edit" 
+            onClick={() => onEdit(scenario.id)}
+            title="Edit scenario"
+            aria-label="Edit scenario"
+          >
+            ✏️
+          </button>
+          <button 
+            className="btn-card-delete" 
+            onClick={() => onDelete(scenario.id)}
+            title="Delete scenario"
+            aria-label="Delete scenario"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <h3 className="scenario-title">
+        {scenario.isOutline ? "Scenario Outline: " : "Scenario: "}
+        {scenario.title}
+      </h3>
+
+      <div className="scenario-steps">
+        <pre className="scenario-steps-pre">
+          {scenario.steps.map((line, i) => (
+            <span key={i} className={classForLine(line)}>
+              {line || " "}
+              {"\n"}
+            </span>
+          ))}
+        </pre>
+      </div>
+
+      <div className="scenario-card-footer-actions">
+        <button 
+          className="btn-quick-action" 
+          onClick={() => onQuickAction("simplify", scenario.title)}
+          title="Simplify this scenario's Gherkin steps via AI"
+        >
+          🪄 Simplify Steps
+        </button>
+        <button 
+          className="btn-quick-action" 
+          onClick={() => onQuickAction("detailed", scenario.title)}
+          title="Make this scenario more detailed via AI"
+        >
+          🔍 Add Details
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────
 export default function App() {
   const [requirements, setRequirements] = useState("")
@@ -111,6 +464,11 @@ export default function App() {
   const [toasts, setToasts]     = useState([])
   const [copied, setCopied]     = useState(false)
   const [forceShowRaw, setForceShowRaw] = useState(false)
+  const [activeEditId, setActiveEditId] = useState(null)
+  const [selectedCategory, setSelectedCategory] = useState("all")
+  const [refinementPrompt, setRefinementPrompt] = useState("")
+  const [diffViewOpen, setDiffViewOpen] = useState(false)
+  const [refineLoading, setRefineLoading] = useState(false)
   
   // Phase 8 Export Options State Hooks
   const [exportOpen, setExportOpen] = useState(false)
@@ -118,6 +476,10 @@ export default function App() {
   const [exportScope, setExportScope] = useState("current") // "current", "all"
   const [includeMetadata, setIncludeMetadata] = useState(true)
   const [includeTraceability, setIncludeTraceability] = useState(true)
+  
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [suggestions, setSuggestions] = useState([])
+  const [suggestionIdx, setSuggestionIdx] = useState(0)
   
   const fileInputRef = useRef(null)
 
@@ -129,7 +491,8 @@ export default function App() {
     } catch { return [] }
   })
   const [activeId, setActiveId] = useState(() => {
-    return localStorage.getItem("testgpt-active-id") || null
+    const saved = localStorage.getItem("testgpt-active-id")
+    return saved ? Number(saved) : null
   })
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try {
@@ -155,7 +518,13 @@ export default function App() {
     else localStorage.removeItem("testgpt-active-id")
   }, [activeId])
 
+  // Reset diff view when active session changes
+  useEffect(() => {
+    setDiffViewOpen(false)
+  }, [activeId])
+
   // Restore active session on page load
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (activeId && sessions.length > 0) {
       const active = sessions.find(s => s.id === activeId)
@@ -166,6 +535,7 @@ export default function App() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Theme
   const [theme, setTheme] = useState(() => {
@@ -188,6 +558,92 @@ export default function App() {
     setToasts(prev => prev.filter(t => t.id !== id))
   }, [])
 
+  // ── Scenario display and editing handlers (Phase 4) ────────
+  const updateSessionResult = (newGherkinText) => {
+    if (!activeId) return;
+    
+    const updatedSessions = sessions.map(s => {
+      if (s.id === activeId) {
+        const currentVersions = [...(s.versions || [{ requirements: s.requirements, result: s.result, timestamp: s.id }])];
+        const activeIdx = s.activeVersionIndex !== undefined ? s.activeVersionIndex : 0;
+        
+        if (currentVersions[activeIdx]) {
+          currentVersions[activeIdx] = {
+            ...currentVersions[activeIdx],
+            result: newGherkinText
+          };
+        }
+        
+        return {
+          ...s,
+          result: newGherkinText,
+          versions: currentVersions
+        };
+      }
+      return s;
+    });
+    
+    setSessions(updatedSessions);
+    setResult(newGherkinText);
+  };
+
+  const handleSaveScenario = (scenarioId, updatedFields) => {
+    const { featureHeader, scenarios } = parseGherkin(result);
+    
+    const updatedScenarios = scenarios.map(sc => {
+      if (sc.id === scenarioId) {
+        const newTags = syncTagsForType(sc.tags, updatedFields.type);
+        return {
+          ...sc,
+          title: updatedFields.title,
+          steps: updatedFields.steps,
+          type: updatedFields.type,
+          tags: newTags
+        };
+      }
+      return sc;
+    });
+
+    const newResult = serializeGherkin(featureHeader, updatedScenarios);
+    updateSessionResult(newResult);
+    setActiveEditId(null);
+    addToast("Scenario updated", "success");
+  };
+
+  const handleDeleteScenario = (scenarioId) => {
+    const { featureHeader, scenarios } = parseGherkin(result);
+    const updatedScenarios = scenarios.filter(sc => sc.id !== scenarioId);
+    const newResult = serializeGherkin(featureHeader, updatedScenarios);
+    
+    updateSessionResult(newResult);
+    addToast("Scenario deleted", "info");
+  };
+
+  const handleAddScenario = () => {
+    const { featureHeader, scenarios } = parseGherkin(result);
+    
+    const newScenarioId = `sc-${Date.now()}-${scenarios.length}-${Math.random().toString(36).substr(2, 9)}`;
+    const newScenario = {
+      id: newScenarioId,
+      title: "New Custom Scenario",
+      isOutline: false,
+      tags: ["@happy-path"],
+      steps: [
+        "Given the system is ready",
+        "When an action is performed",
+        "Then the expected outcome occurs"
+      ],
+      type: "happy-path"
+    };
+
+    const updatedScenarios = [...scenarios, newScenario];
+    const newResult = serializeGherkin(featureHeader, updatedScenarios);
+    
+    updateSessionResult(newResult);
+    setActiveEditId(newScenarioId); // Enter edit mode immediately
+    addToast("Added custom scenario", "success");
+  };
+
   // Start a new draft session
   const startNewSession = () => {
     setActiveId(null)
@@ -195,6 +651,8 @@ export default function App() {
     setResult("")
     setError("")
     setForceShowRaw(false)
+    setActiveEditId(null)
+    setSelectedCategory("all")
     addToast("Started a new session", "success")
   }
 
@@ -225,6 +683,115 @@ export default function App() {
     setResult(target.result)
     setError("")
     setForceShowRaw(false)
+    setActiveEditId(null)
+    setSelectedCategory("all")
+  }
+
+  // Phase 4.7 Clickable Traceability Links
+  const handleTraceClick = (traceId) => {
+    if (!traceId) return;
+    const textarea = document.getElementById("requirements-input");
+    if (!textarea) return;
+
+    const text = textarea.value;
+    const reqNum = traceId.replace(/[^0-9]/g, "");
+    if (!reqNum) return;
+
+    const patterns = [
+      new RegExp(`(?:^|\\n)\\s*${reqNum}\\s*[\\.\\)]`, "i"),
+      new RegExp(`(?:^|\\n)\\s*REQ-?${reqNum}\\b`, "i")
+    ];
+
+    let match = null;
+    for (const pattern of patterns) {
+      match = text.match(pattern);
+      if (match) break;
+    }
+
+    if (match && match.index !== undefined) {
+      const start = match.index + (match[0].startsWith("\n") ? 1 : 0);
+      let end = text.indexOf("\n", start);
+      if (end === -1) end = text.length;
+
+      textarea.focus();
+      textarea.setSelectionRange(start, end);
+      addToast(`Highlighted requirement: ${traceId}`, "info");
+    } else {
+      addToast(`Could not locate requirement line for ${traceId}`, "info");
+    }
+  };
+
+  // Phase 5 Conversational Refinement
+  const handleRefine = async (customPromptText) => {
+    const promptToSend = (customPromptText || refinementPrompt).trim()
+    if (!promptToSend || !activeId || !activeSession) return
+
+    setRefineLoading(true)
+    setError("")
+    setActiveEditId(null)
+    
+    const currentVersions = activeSession.versions || [{ requirements: activeSession.requirements, result: activeSession.result, timestamp: activeSession.id }]
+    const activeVer = currentVersions[activeVersionIdx] || currentVersions[0]
+    
+    const existingMessages = activeVer.messages || [
+      { role: "user", content: `Generate Gherkin acceptance tests for these requirements:\n\n${activeSession.requirements}` },
+      { role: "assistant", content: activeSession.result }
+    ]
+
+    const updatedMessages = [
+      ...existingMessages,
+      { role: "user", content: promptToSend }
+    ]
+
+    try {
+      const res = await fetch("http://localhost:8000/refine", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: updatedMessages }),
+      })
+      if (!res.ok) throw new Error(`Server error ${res.status}`)
+      const data = await res.json()
+
+      const completeMessages = [
+        ...updatedMessages,
+        { role: "assistant", content: data.result }
+      ]
+
+      const updatedSessions = sessions.map(s => {
+        if (s.id === activeId) {
+          const nextVersions = [
+            ...currentVersions,
+            {
+              requirements: activeSession.requirements,
+              result: data.result,
+              timestamp: Date.now(),
+              versionType: customPromptText ? "quick-action" : "ai-refinement",
+              messages: completeMessages
+            }
+          ]
+          const nextIndex = nextVersions.length - 1
+
+          return {
+            ...s,
+            result: data.result,
+            versions: nextVersions,
+            activeVersionIndex: nextIndex
+          }
+        }
+        return s
+      })
+
+      setSessions(updatedSessions)
+      setResult(data.result)
+      setRefinementPrompt("")
+      setSelectedCategory("all")
+      addToast("Scenarios refined!", "success")
+    } catch {
+      setError("Could not reach backend for refinement. Verify port 8000 is active.")
+      addToast("Refinement failed", "error")
+    } finally {
+      setRefineLoading(false)
+    }
   }
 
   // Generate & save to session
@@ -243,6 +810,8 @@ export default function App() {
     setRequirements(sanitized)
     
     setForceShowRaw(false)
+    setActiveEditId(null)
+    setSelectedCategory("all")
     setLoading(true); setError(""); setResult("")
     try {
       const res = await fetch("http://localhost:8000/generate", {
@@ -258,10 +827,19 @@ export default function App() {
         // Create a completely new session (Draft -> Active)
         const newSession = {
           id: Date.now(),
+          reqNumber: sessions.length + 1,
           title: sessionTitle(sanitized, sessions.length),
           requirements: sanitized,
           result: data.result,
-          versions: [{ requirements: sanitized, result: data.result, timestamp: Date.now() }],
+          versions: [{ 
+            requirements: sanitized, 
+            result: data.result, 
+            timestamp: Date.now(),
+            messages: [
+              { role: "user", content: `Generate Gherkin acceptance tests for these requirements:\n\n${sanitized}` },
+              { role: "assistant", content: data.result }
+            ]
+          }],
           activeVersionIndex: 0
         }
         setSessions(prev => [newSession, ...prev])
@@ -273,7 +851,15 @@ export default function App() {
         const updatedSessions = sessions.map(s => {
           if (s.id === activeId) {
             const currentVersions = s.versions || [{ requirements: s.requirements, result: s.result, timestamp: s.id }]
-            const newVersion = { requirements: sanitized, result: data.result, timestamp: Date.now() }
+            const newVersion = { 
+              requirements: sanitized, 
+              result: data.result, 
+              timestamp: Date.now(),
+              messages: [
+                { role: "user", content: `Generate Gherkin acceptance tests for these requirements:\n\n${sanitized}` },
+                { role: "assistant", content: data.result }
+              ]
+            }
             const nextVersions = [...currentVersions, newVersion]
             const nextIndex = nextVersions.length - 1
             
@@ -302,13 +888,15 @@ export default function App() {
   // Load a session
   const loadSession = (session) => {
     const initializedVersions = session.versions || [{ requirements: session.requirements, result: session.result, timestamp: session.id }]
-    const initializedIndex = session.hasOwnProperty("activeVersionIndex") ? session.activeVersionIndex : 0
+    const initializedIndex = session.activeVersionIndex !== undefined ? session.activeVersionIndex : 0
     const target = initializedVersions[initializedIndex] || initializedVersions[0]
 
     setRequirements(target.requirements)
     setResult(target.result)
     setError("")
     setForceShowRaw(false)
+    setActiveEditId(null)
+    setSelectedCategory("all")
     setActiveId(session.id)
   }
 
@@ -321,7 +909,7 @@ export default function App() {
         if (updated.length > 0) {
           const first = updated[0]
           const initVersions = first.versions || [{ requirements: first.requirements, result: first.result, timestamp: first.id }]
-          const idx = first.hasOwnProperty("activeVersionIndex") ? first.activeVersionIndex : 0
+          const idx = first.activeVersionIndex !== undefined ? first.activeVersionIndex : 0
           const tgt = initVersions[idx] || initVersions[0]
           setRequirements(tgt.requirements)
           setResult(tgt.result)
@@ -408,7 +996,8 @@ export default function App() {
   }
 
   // Generate HTML for PDF/Word exports (8.2 / 8.3 / 8.4 / 8.6)
-  const generateExportHTML = (targetSessions, mode) => {
+  /* eslint-disable-next-line no-unused-vars */
+  const generateExportHTML = (targetSessions, _mode) => {
     // Generate Traceability Matrix rows
     let matrixRows = ""
     targetSessions.forEach((s, sIdx) => {
@@ -787,7 +1376,7 @@ export default function App() {
             </button>
           </div>
           <ul className="sidebar-list">
-            {sessions.map((s) => (
+            {sessions.map((s, sIdx) => (
               <li
                 key={s.id}
                 className={`sidebar-item ${s.id === activeId ? "sidebar-item-active" : ""}`}
@@ -796,7 +1385,7 @@ export default function App() {
                 tabIndex={0}
                 onKeyDown={e => e.key === "Enter" && loadSession(s)}
               >
-                <span className="sidebar-item-title">{s.title}</span>
+                <span className="sidebar-item-title">REQ-{sessions.length - sIdx}: {s.title}</span>
                 <button
                   className="sidebar-item-delete"
                   onClick={e => deleteSession(e, s.id)}
@@ -876,26 +1465,45 @@ export default function App() {
             <div className="panel-header">
               <div className="panel-header-title-row">
                 <h2>Generated Tests</h2>
-                {activeSession && activeSession.versions && activeSession.versions.length > 1 && (
-                  <div className="version-switcher">
+                {result && (
+                  <div className="output-header-actions">
+                    {activeSession && activeSession.versions && activeSession.versions.length > 1 && (
+                      <div className="version-switcher">
+                        <button
+                          className="btn-version"
+                          disabled={activeVersionIdx === 0}
+                          onClick={() => handleVersionChange(activeVersionIdx - 1)}
+                          aria-label="Previous version"
+                        >
+                          ←
+                        </button>
+                        <span className="version-text">
+                          {activeVersionIdx + 1} / {totalVersions}
+                        </span>
+                        <button
+                          className="btn-version"
+                          disabled={activeVersionIdx === totalVersions - 1}
+                          onClick={() => handleVersionChange(activeVersionIdx + 1)}
+                          aria-label="Next version"
+                        >
+                          →
+                        </button>
+                        <button 
+                          className={`btn-diff-toggle ${diffViewOpen ? "active" : ""}`}
+                          onClick={() => setDiffViewOpen(o => !o)}
+                          title="Toggle visual diff with original version"
+                        >
+                          {diffViewOpen ? "📝 Hide Diff" : "✨ Diff View"}
+                        </button>
+                      </div>
+                    )}
                     <button
-                      className="btn-version"
-                      disabled={activeVersionIdx === 0}
-                      onClick={() => handleVersionChange(activeVersionIdx - 1)}
-                      aria-label="Previous version"
+                      className="btn-regenerate-badge"
+                      onClick={handleGenerate}
+                      disabled={loading}
+                      title="Regenerate all scenarios for this requirement"
                     >
-                      ←
-                    </button>
-                    <span className="version-text">
-                      {activeVersionIdx + 1} / {totalVersions}
-                    </span>
-                    <button
-                      className="btn-version"
-                      disabled={activeVersionIdx === totalVersions - 1}
-                      onClick={() => handleVersionChange(activeVersionIdx + 1)}
-                      aria-label="Next version"
-                    >
-                      →
+                      🔄 Regenerate
                     </button>
                   </div>
                 )}
@@ -936,7 +1544,220 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <GherkinBlock text={result} />
+                  forceShowRaw ? (
+                    <GherkinBlock text={result} />
+                  ) : (
+                    (() => {
+                      const { scenarios } = parseGherkin(result);
+                      const filteredScenarios = scenarios.filter(sc => 
+                        selectedCategory === "all" || sc.type === selectedCategory
+                      );
+                      const activeIndex = sessions.findIndex(s => Number(s.id) === Number(activeId));
+                      const currentSession = sessions[activeIndex];
+                      const reqIndex = activeIndex !== -1 ? sessions.length - activeIndex : 1;
+                      
+                      const countType = (type) => scenarios.filter(sc => sc.type === type).length;
+
+                      const handleTextareaChange = (e) => {
+                        const val = e.target.value;
+                        setRefinementPrompt(val);
+
+                        const cursor = e.target.selectionStart;
+                        const lastAtIdx = val.lastIndexOf("@", cursor - 1);
+                        if (lastAtIdx !== -1) {
+                          const textAfterAt = val.slice(lastAtIdx + 1, cursor);
+                          if (!/\s/.test(textAfterAt)) {
+                            const filtered = scenarios.map((sc, idx) => ({
+                              index: idx + 1,
+                              title: sc.title
+                            })).filter(sc => {
+                              if (!textAfterAt) return true;
+                              return sc.index.toString().includes(textAfterAt) || 
+                                     sc.title.toLowerCase().includes(textAfterAt.toLowerCase());
+                            });
+
+                            setSuggestions(filtered);
+                            setShowSuggestions(filtered.length > 0);
+                            setSuggestionIdx(0);
+                            return;
+                          }
+                        }
+                        setShowSuggestions(false);
+                      };
+
+                      const selectSuggestion = (scIndex) => {
+                        const textarea = document.getElementById("refinement-chat-input");
+                        if (!textarea) return;
+
+                        const text = refinementPrompt;
+                        const cursor = textarea.selectionStart;
+                        const lastAtIdx = text.lastIndexOf("@", cursor - 1);
+                        if (lastAtIdx !== -1) {
+                          const before = text.slice(0, lastAtIdx);
+                          const after = text.slice(cursor);
+                          const replacement = `@${scIndex} `;
+                          const newText = before + replacement + after;
+
+                          setRefinementPrompt(newText);
+                          setShowSuggestions(false);
+
+                          setTimeout(() => {
+                            textarea.focus();
+                            const newPos = lastAtIdx + replacement.length;
+                            textarea.setSelectionRange(newPos, newPos);
+                          }, 50);
+                        }
+                      };
+
+                      const handleTextareaKeyDown = (e) => {
+                        if (showSuggestions && suggestions.length > 0) {
+                          if (e.key === "ArrowDown") {
+                            e.preventDefault();
+                            setSuggestionIdx(idx => (idx + 1) % suggestions.length);
+                          } else if (e.key === "ArrowUp") {
+                            e.preventDefault();
+                            setSuggestionIdx(idx => (idx - 1 + suggestions.length) % suggestions.length);
+                          } else if (e.key === "Enter" || e.key === "Tab") {
+                            e.preventDefault();
+                            selectSuggestion(suggestions[suggestionIdx].index);
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setShowSuggestions(false);
+                          }
+                        }
+                      };
+
+                      if (diffViewOpen) {
+                        const originalText = currentSession?.versions?.[0]?.result || "";
+                        const currentText = result || "";
+                        const diffLines = computeLineDiff(originalText, currentText);
+
+                        return (
+                          <div className="scenarios-container diff-container">
+                            <div className="diff-view-heading">
+                              🔍 Comparing Original (Version 1) with Current (Version {activeVersionIdx + 1})
+                            </div>
+                            <div className="diff-lines-list">
+                              <pre className="diff-pre">
+                                {diffLines.map((line, idx) => (
+                                  <div key={idx} className={`diff-line diff-line-${line.type}`}>
+                                    <span className="diff-line-marker">
+                                      {line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}
+                                    </span>
+                                    <span className="diff-line-text">{line.text || " "}</span>
+                                  </div>
+                                ))}
+                              </pre>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="scenarios-container">
+                          {/* Category Filter Tabs */}
+                          <div className="scenarios-filter-tabs">
+                            {[
+                              { id: "all", label: `All (${scenarios.length})` },
+                              { id: "happy-path", label: `Happy Path (${countType("happy-path")})` },
+                              { id: "edge-case", label: `Edge Cases (${countType("edge-case")})` },
+                              { id: "negative", label: `Negative (${countType("negative")})` }
+                            ].map(tab => (
+                              <button
+                                key={tab.id}
+                                className={`filter-tab-btn filter-tab-${tab.id} ${selectedCategory === tab.id ? "active" : ""}`}
+                                onClick={() => setSelectedCategory(tab.id)}
+                              >
+                                {tab.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* Scenarios List */}
+                          <div className="scenarios-cards-list">
+                            {filteredScenarios.map(scenario => (
+                              <ScenarioCard
+                                key={scenario.id}
+                                scenario={scenario}
+                                requirementIndex={reqIndex}
+                                isEditing={activeEditId === scenario.id}
+                                onEdit={setActiveEditId}
+                                onSave={handleSaveScenario}
+                                onCancel={() => setActiveEditId(null)}
+                                onDelete={handleDeleteScenario}
+                                onQuickAction={(action, title) => {
+                                  const text = action === "simplify"
+                                    ? `Please rewrite and simplify the Gherkin steps for the scenario titled "${title}" to make them extremely clear and concise. Keep all other scenarios in the Gherkin feature file exactly as they are, and return the complete Gherkin feature containing all scenarios.`
+                                    : `Please expand and add more specific details to the Gherkin steps for the scenario titled "${title}". Keep all other scenarios in the Gherkin feature file exactly as they are, and return the complete Gherkin feature containing all scenarios.`;
+                                  handleRefine(text);
+                                }}
+                                onTraceClick={handleTraceClick}
+                                scenarioIndex={scenarios.indexOf(scenario) + 1}
+                              />
+                            ))}
+
+                            {filteredScenarios.length === 0 && (
+                              <div className="empty-scenarios-filter">
+                                <p>No scenarios found in this category.</p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Add Custom Scenario Button */}
+                          <div className="scenarios-footer-actions">
+                            <button className="btn btn-outline btn-add-scenario" onClick={handleAddScenario}>
+                              + Add Custom Scenario
+                            </button>
+                          </div>
+
+                          {/* Phase 5.2 & 5.3 Conversational Refinement Chat Interface */}
+                          <div className="refinement-chat-container" style={{ position: "relative" }}>
+                            <h4 className="refinement-chat-heading">🤖 Iterative Refinement Chat</h4>
+                            <p className="refinement-chat-sub">Refine and adapt these Gherkin scenarios interactively using conversational AI prompts.</p>
+                            
+                            {showSuggestions && suggestions.length > 0 && (
+                              <div className="chat-autocomplete-dropdown">
+                                {suggestions.map((s, idx) => (
+                                  <div
+                                    key={s.index}
+                                    className={`chat-autocomplete-item ${idx === suggestionIdx ? "active" : ""}`}
+                                    onClick={() => selectSuggestion(s.index)}
+                                  >
+                                    <span className="autocomplete-badge">@{s.index}</span>
+                                    <span className="autocomplete-title">{s.title}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="refinement-chat-input-row">
+                              <textarea
+                                id="refinement-chat-input"
+                                className="refinement-chat-textarea"
+                                value={refinementPrompt}
+                                onChange={handleTextareaChange}
+                                onKeyDown={handleTextareaKeyDown}
+                                onBlur={() => {
+                                  // Delay closing dropdown slightly so click events on items can fire
+                                  setTimeout(() => setShowSuggestions(false), 250);
+                                }}
+                                placeholder="Ask AI to refine scenarios (e.g., 'Make @1 cover duplicate emails too' or 'For #3, add a Given step for user roles')..."
+                                rows={2}
+                                disabled={refineLoading}
+                              />
+                              <button 
+                                className="btn btn-primary btn-refine-send" 
+                                onClick={() => handleRefine()}
+                                disabled={refineLoading || !refinementPrompt.trim()}
+                              >
+                                {refineLoading ? "Refining..." : "Send Request 🚀"}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()
+                  )
                 )
               )}
             </div>

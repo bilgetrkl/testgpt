@@ -56,24 +56,24 @@
 
 ## Phase 4 — Gherkin Output Display & Editing
 
-- [ ] 4.1 Design the test scenario output view (list of scenarios per requirement)
-- [ ] 4.2 Render generated Gherkin scenarios with syntax highlighting
-- [ ] 4.3 Allow users to edit individual scenarios inline
-- [ ] 4.4 Allow users to delete individual scenarios
-- [ ] 4.5 Allow users to manually add custom scenarios
-- [ ] 4.6 Group scenarios by type (happy path, edge case, negative, etc.) with visual labels
-- [ ] 4.7 Show which requirement each scenario traces back to (traceability link)
+- [x] 4.1 Design the test scenario output view (list of scenarios per requirement)
+- [x] 4.2 Render generated Gherkin scenarios with syntax highlighting
+- [x] 4.3 Allow users to edit individual scenarios inline
+- [x] 4.4 Allow users to delete individual scenarios
+- [x] 4.5 Allow users to manually add custom scenarios
+- [x] 4.6 Group scenarios by type (happy path, edge case, negative, etc.) with visual labels
+- [x] 4.7 Show which requirement each scenario traces back to (traceability link)
 
 ---
 
 ## Phase 5 — Iterative Refinement Workflow
 
-- [ ] 5.1 Implement a "Regenerate" button to re-request scenarios for a specific requirement
-- [ ] 5.2 Allow users to provide feedback or instructions to refine a scenario (follow-up prompt input)
-- [ ] 5.3 Maintain conversation history per requirement for multi-turn refinement
-- [ ] 5.4 Implement "Add more scenarios" action (e.g. generate 3 more edge cases)
-- [ ] 5.5 Implement "Simplify this scenario" / "Make this more detailed" quick actions
-- [ ] 5.6 Preserve the original AI-generated version alongside edits (diff view or version history)
+- [x] 5.1 Implement a "Regenerate" button to re-request scenarios for a specific requirement
+- [x] 5.2 Allow users to provide feedback or instructions to refine a scenario (follow-up prompt input)
+- [x] 5.3 Maintain conversation history per requirement for multi-turn refinement
+- [x] 5.4 Implement "Add more scenarios" action (e.g. generate 3 more edge cases)
+- [x] 5.5 Implement "Simplify this scenario" / "Make this more detailed" quick actions
+- [x] 5.6 Preserve the original AI-generated version alongside edits (diff view or version history)
 
 ---
 
@@ -154,7 +154,7 @@
 
 ## Phase 10 — Testing & Quality Assurance
 
-- [ ] 10.1 Write unit tests for core utility functions (prompt builder, response parser, etc.)
+- [x] 10.1 Write unit tests for core utility functions (prompt builder, response parser, etc.)
 - [ ] 10.2 Write integration tests for the AI API call layer
 - [ ] 10.3 Write end-to-end tests for the main user workflow (input → generate → export)
 - [ ] 10.4 Manually test with at least 5 real-world requirement samples of varying complexity
