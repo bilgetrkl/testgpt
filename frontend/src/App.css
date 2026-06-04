@@ -254,6 +254,27 @@
   order: 4;
 }
 
+.requirements-textarea-highlighted {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  animation: req-highlight-pulse 1.2s ease-in-out 2;
+}
+
+@keyframes req-highlight-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 35%, transparent); }
+}
+
+.req-highlight-badge {
+  margin-left: 10px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
+}
+
 .panel-input-body > .quality-panel {
   order: 2;
   position: sticky;
@@ -262,6 +283,187 @@
   margin-top: 10px;
   margin-bottom: 10px;
   box-shadow: var(--shadow-md);
+}
+
+.input-type-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 12px 20px 0;
+}
+
+.input-type-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.input-type-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  background: var(--bg-surface);
+}
+
+.input-type-option.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
+}
+
+.input-type-option input {
+  accent-color: var(--accent);
+}
+
+.out-of-sync-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 20px 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning, #d97706) 45%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warning, #d97706) 10%, var(--bg-surface));
+}
+
+.out-of-sync-content p {
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.out-of-sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.analysis-artifacts {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.analysis-artifact-section {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+
+.analysis-artifact-title {
+  margin: 0 0 8px;
+  font-size: 0.92rem;
+}
+
+.analysis-artifact-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.analysis-artifact-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.88rem;
+}
+
+.analysis-artifact-id {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.analysis-artifact-ref {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
+  font-size: 0.75rem;
+}
+
+.coverage-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.coverage-tag-legend {
+  margin-top: 16px;
+}
+
+.semantic-coverage-panel {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface);
+}
+
+.semantic-coverage-title {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.semantic-coverage-summary {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.semantic-coverage-scroll {
+  overflow-x: auto;
+}
+
+.semantic-coverage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.semantic-coverage-table th,
+.semantic-coverage-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.semantic-rationale {
+  max-width: 320px;
+}
+
+.semantic-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  text-transform: capitalize;
+}
+
+.semantic-status-covered {
+  background: color-mix(in srgb, #16a34a 18%, transparent);
+}
+
+.semantic-status-partial {
+  background: color-mix(in srgb, #d97706 18%, transparent);
+}
+
+.semantic-status-not_covered {
+  background: color-mix(in srgb, #dc2626 18%, transparent);
 }
 
 .input-action-secondary {

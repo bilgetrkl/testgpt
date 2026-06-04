@@ -48,3 +48,28 @@ def test_improve_requires_warnings():
         json={"requirements": "1. " + "x" * 20, "warnings": []},
     )
     assert r.status_code == 400
+
+
+def test_coverage_review_rejects_short_gherkin():
+    reqs = "1. " + "x" * 20
+    r = client.post(
+        "/coverage-review",
+        json={"requirements": reqs, "gherkin": "short"},
+    )
+    assert r.status_code == 400
+
+
+def test_coverage_review_rejects_short_requirements():
+    r = client.post(
+        "/coverage-review",
+        json={"requirements": "short", "gherkin": "Feature: X\n  Scenario: Y\n    Given a\n    When b\n    Then c"},
+    )
+    assert r.status_code == 400
+
+
+def test_generate_accepts_input_type():
+    r = client.post(
+        "/generate",
+        json={"requirements": "short", "inputType": "use_case"},
+    )
+    assert r.status_code == 400

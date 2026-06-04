@@ -13,11 +13,14 @@ from pydantic import BaseModel, Field
 from ai_utils import (
     ANALYZE_SYSTEM,
     CHANGE_IMPACT_SYSTEM,
+    COVERAGE_REVIEW_SYSTEM,
     GENERATION_SYSTEM,
     IMPROVE_REQUIREMENTS_SYSTEM,
     REFINEMENT_SYSTEM,
     chat_completion,
     clean_gherkin_output,
+    input_type_guidance,
+    normalize_input_type,
     parse_json_response,
     validate_requirements,
 )
@@ -41,6 +44,7 @@ app.add_middleware(
 # Simple in-memory rate limit (nice-to-have for dev)
 _RATE_WINDOW_SEC = 60
 _RATE_MAX_REQUESTS = 30
+_MIN_GHERKIN_LEN = 10
 _rate_buckets: dict[str, list[float]] = defaultdict(list)
 
 
@@ -59,6 +63,13 @@ def _client_id(request: Request) -> str:
 
 class RequirementsInput(BaseModel):
     requirements: str
+    inputType: str = "requirements"
+
+
+class CoverageReviewInput(BaseModel):
+    requirements: str
+    gherkin: str
+    inputType: str = "requirements"
 
 
 class RefinementInput(BaseModel):
@@ -80,6 +91,47 @@ def read_root():
     return {"status": "TestGPT backend running", "version": "1.1.0"}
 
 
+def _normalize_analysis(parsed: dict) -> dict:
+    warnings = parsed.get("warnings") or []
+    for i, w in enumerate(warnings):
+        if not w.get("id"):
+            w["id"] = f"W{i + 1}"
+
+    behaviors = parsed.get("behaviors") or []
+    for i, b in enumerate(behaviors):
+        if not b.get("id"):
+            b["id"] = f"B{i + 1}"
+
+    business_rules = parsed.get("businessRules") or []
+    for i, r in enumerate(business_rules):
+        if not r.get("id"):
+            r["id"] = f"BR{i + 1}"
+
+    assumptions = parsed.get("assumptions") or []
+    for i, a in enumerate(assumptions):
+        if not a.get("id"):
+            a["id"] = f"A{i + 1}"
+
+    return {
+        "qualityScore": int(parsed.get("qualityScore", 0)),
+        "summary": parsed.get("summary", ""),
+        "behaviors": behaviors,
+        "businessRules": business_rules,
+        "assumptions": assumptions,
+        "warnings": warnings,
+    }
+
+
+def _generation_user_message(text: str, input_type: str) -> str:
+    guidance = input_type_guidance(input_type)
+    label = normalize_input_type(input_type).replace("_", " ")
+    return (
+        f"Input type: {label}\n"
+        f"Guidance: {guidance}\n\n"
+        f"Generate Gherkin acceptance tests for this input:\n\n{text}"
+    )
+
+
 @app.post("/analyze")
 def analyze_requirements(data: RequirementsInput, request: Request):
     _check_rate_limit(_client_id(request))
@@ -88,27 +140,26 @@ def analyze_requirements(data: RequirementsInput, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    input_type = normalize_input_type(data.inputType)
+    guidance = input_type_guidance(input_type)
+
     try:
         response = chat_completion(
             [
                 {"role": "system", "content": ANALYZE_SYSTEM},
                 {
                     "role": "user",
-                    "content": f"Analyze these requirements:\n\n{text}",
+                    "content": (
+                        f"Input type: {input_type.replace('_', ' ')}\n"
+                        f"Guidance: {guidance}\n\n"
+                        f"Analyze this input:\n\n{text}"
+                    ),
                 },
             ]
         )
         raw = response.choices[0].message.content or "{}"
         parsed = parse_json_response(raw)
-        warnings = parsed.get("warnings") or []
-        for i, w in enumerate(warnings):
-            if not w.get("id"):
-                w["id"] = f"W{i + 1}"
-        return {
-            "qualityScore": int(parsed.get("qualityScore", 0)),
-            "summary": parsed.get("summary", ""),
-            "warnings": warnings,
-        }
+        return _normalize_analysis(parsed)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=502, detail="AI returned invalid analysis JSON") from exc
     except ValueError as exc:
@@ -191,6 +242,61 @@ def change_impact(data: ChangeImpactInput, request: Request):
         raise HTTPException(status_code=502, detail=f"Change-impact analysis failed: {exc}") from exc
 
 
+@app.post("/coverage-review")
+def coverage_review(data: CoverageReviewInput, request: Request):
+    _check_rate_limit(_client_id(request))
+    try:
+        req_text = validate_requirements(data.requirements)
+        gherkin = (data.gherkin or "").strip()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if len(gherkin) < _MIN_GHERKIN_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Gherkin output must be at least {_MIN_GHERKIN_LEN} characters",
+        )
+
+    input_type = normalize_input_type(data.inputType)
+    guidance = input_type_guidance(input_type)
+
+    try:
+        response = chat_completion(
+            [
+                {"role": "system", "content": COVERAGE_REVIEW_SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Input type: {input_type.replace('_', ' ')}\n"
+                        f"Guidance: {guidance}\n\n"
+                        f"REQUIREMENTS:\n{req_text}\n\n"
+                        f"GENERATED GHERKIN:\n{gherkin}"
+                    ),
+                },
+            ]
+        )
+        raw = response.choices[0].message.content or "{}"
+        parsed = parse_json_response(raw)
+        reviews = parsed.get("reviews") or []
+        for i, review in enumerate(reviews):
+            if not review.get("requirementRef"):
+                review["requirementRef"] = f"REQ-{i + 1}"
+            review.setdefault("status", "partial")
+            review.setdefault("rationale", "")
+            review.setdefault("missingFlows", [])
+            review.setdefault("scenarioRefs", [])
+        return {
+            "summary": parsed.get("summary", ""),
+            "reviews": reviews,
+        }
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=502, detail="AI returned invalid coverage-review JSON") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Coverage review failed: {exc}") from exc
+
+
 @app.post("/generate")
 def generate_tests(data: RequirementsInput, request: Request):
     _check_rate_limit(_client_id(request))
@@ -205,7 +311,7 @@ def generate_tests(data: RequirementsInput, request: Request):
                 {"role": "system", "content": GENERATION_SYSTEM},
                 {
                     "role": "user",
-                    "content": f"Generate Gherkin acceptance tests for these requirements:\n\n{text}",
+                    "content": _generation_user_message(text, data.inputType),
                 },
             ]
         )
@@ -232,7 +338,7 @@ def generate_tests_stream(data: RequirementsInput, request: Request):
                     {"role": "system", "content": GENERATION_SYSTEM},
                     {
                         "role": "user",
-                        "content": f"Generate Gherkin acceptance tests:\n\n{text}",
+                        "content": _generation_user_message(text, data.inputType),
                     },
                 ],
                 stream=True,

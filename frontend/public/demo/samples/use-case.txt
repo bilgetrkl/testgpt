@@ -1,0 +1,29 @@
+Use Case: Apply Discount Coupon at Checkout
+Actor: Registered Customer
+Goal: Reduce order total using a valid promotional coupon
+
+Preconditions:
+- Customer is logged in
+- Shopping cart contains at least one item
+- Customer is on the checkout page
+
+Main Flow:
+1. Customer enters a coupon code in the "Promo code" field.
+2. Customer clicks "Apply coupon".
+3. System validates the coupon (active date range, usage limit, minimum order value).
+4. System recalculates cart total, tax, and displays the discount amount.
+5. Customer confirms the updated total and proceeds to payment.
+
+Alternative Flows:
+- AF-1 Invalid coupon: If the code does not exist or is expired, the system shows "This coupon is not valid" and keeps previous totals unchanged.
+- AF-2 Minimum not met: If cart subtotal is below the coupon minimum, the system shows the required minimum amount.
+- AF-3 Coupon already applied: If a coupon is already active, the system prompts the user to remove it before applying another.
+
+Exceptions:
+- EX-1 Payment service unavailable: Checkout is blocked; customer sees "Payment temporarily unavailable, try again later."
+- EX-2 Session timeout: Cart is preserved for 30 minutes; after timeout the customer must log in again.
+
+Business Rules:
+- Only one coupon per order
+- Discount cannot exceed 50% of cart subtotal
+- Free-shipping coupons apply only to standard delivery

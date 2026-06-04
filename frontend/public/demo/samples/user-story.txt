@@ -1,0 +1,32 @@
+User Story 1 — View Order History
+As a registered customer,
+I want to view my past orders with status and delivery date,
+So that I can track purchases and reorder items.
+
+Acceptance criteria:
+- Order list shows order ID, date, status (Pending, Shipped, Delivered, Cancelled), and total amount
+- Most recent orders appear first
+- Empty state shows "You have no orders yet" with a link to the catalog
+- Cancelled orders display the cancellation reason when provided
+
+User Story 2 — Cancel Pending Order
+As a registered customer,
+I want to cancel an order that has not yet shipped,
+So that I am not charged for items I no longer need.
+
+Acceptance criteria:
+- Cancel is available only when order status is Pending
+- User must confirm cancellation in a dialog
+- After cancellation, status changes to Cancelled and a confirmation email is sent
+- Refund is initiated within 24 hours for prepaid orders
+- Attempting to cancel a Shipped order shows "This order can no longer be cancelled"
+
+User Story 3 — Reorder from History
+As a registered customer,
+I want to add all items from a previous order to my cart,
+So that I can quickly repeat a purchase.
+
+Acceptance criteria:
+- "Reorder" button is visible on each order detail page
+- Unavailable or discontinued products are skipped with a warning listing skipped items
+- Available items are added with the same quantities as the original order when still in stock

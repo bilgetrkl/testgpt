@@ -9,14 +9,47 @@ import {
   isValidGherkin,
   buildCoverageMatrix,
   buildCoverageSummary,
+  findRequirementRange,
+  scrollTextareaToRange,
   COVERAGE_FLOW_TYPES,
   coverageStatusLabel,
   isMajorWarning,
   warningTypeLabel,
 } from "./gherkinUtils.js"
+import { generateExportHTML } from "./exportUtils.js"
 import "./App.css"
 
 const API_BASE = "http://localhost:8000"
+
+const INPUT_TYPES = [
+  { id: "requirements", label: "Requirements" },
+  { id: "use_case", label: "Use Case" },
+  { id: "user_story", label: "User Story" },
+]
+
+const USE_CASE_TEMPLATE = `Use Case: [Title]
+Actor: [Primary actor]
+Goal: [What the actor wants to achieve]
+
+Preconditions:
+- [System/user state before the flow starts]
+
+Main Flow:
+1. [Step]
+2. [Step]
+
+Alternative Flows:
+- AF-1: [When X happens, then Y]
+
+Exceptions:
+- EX-1: [Error or failure condition and expected system response]
+`
+
+const INPUT_TYPE_PLACEHOLDERS = {
+  requirements: "1. Users must be able to register with email and password.\n2. After registration, a confirmation email should be sent.\n3. Users must be able to log in with their credentials.",
+  use_case: USE_CASE_TEMPLATE,
+  user_story: "As a registered user, I want to reset my password,\nSo that I can regain access if I forget it.\n\nAcceptance criteria:\n- Reset link expires after 24 hours\n- Invalid email shows a generic confirmation message",
+}
 
 // ── Gherkin Highlighter ───────────────────────────────────────
 function classForLine(line) {
@@ -289,6 +322,7 @@ function ScenarioCard({
 // ── App ───────────────────────────────────────────────────────
 export default function App() {
   const [requirements, setRequirements] = useState("")
+  const [inputType, setInputType] = useState("requirements")
   const [loading, setLoading]   = useState(false)
   const [result, setResult]     = useState("")
   const [error, setError]       = useState("")
@@ -320,7 +354,10 @@ export default function App() {
   const [useStreaming, setUseStreaming] = useState(false)
   const [changeImpactOpen, setChangeImpactOpen] = useState(false)
   const [changeImpactResult, setChangeImpactResult] = useState(null)
-  const [previousRequirements, setPreviousRequirements] = useState("")
+  const [coverageReview, setCoverageReview] = useState(null)
+  const [coverageReviewLoading, setCoverageReviewLoading] = useState(false)
+  const [highlightedReqId, setHighlightedReqId] = useState(null)
+  const highlightTimerRef = useRef(null)
   
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [suggestions, setSuggestions] = useState([])
@@ -351,6 +388,13 @@ export default function App() {
   const activeSession = sessions.find(s => s.id === activeId)
   const activeVersionIdx = activeSession ? (activeSession.activeVersionIndex || 0) : 0
   const totalVersions = activeSession && activeSession.versions ? activeSession.versions.length : 1
+  const generatedBaselineRequirements = activeSession?.requirements || ""
+  const requirementsChangedSinceGeneration = Boolean(
+    activeSession?.result &&
+    generatedBaselineRequirements.trim() &&
+    requirements.trim() &&
+    generatedBaselineRequirements.trim() !== requirements.trim()
+  )
 
   // Persist sessions to localStorage
   useEffect(() => {
@@ -369,6 +413,7 @@ export default function App() {
       const active = sessions.find(s => s.id === activeId)
       if (active) {
         setRequirements(active.requirements)
+        setInputType(active.inputType || "requirements")
         setResult(active.result)
       }
     }
@@ -387,6 +432,10 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme)
     localStorage.setItem("testgpt-theme", theme)
   }, [theme])
+
+  useEffect(() => () => {
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
+  }, [])
 
   const addToast = useCallback((message, type = "info") => {
     const id = Date.now()
@@ -528,38 +577,40 @@ export default function App() {
   }
 
   // Phase 4.7 Clickable Traceability Links
+  const applyRequirementHighlight = useCallback((traceId) => {
+    const range = findRequirementRange(requirements, traceId, inputType)
+    if (!range) return false
+
+    const textarea = document.getElementById("requirements-input")
+    if (!textarea) return false
+
+    const applySelection = () => {
+      textarea.focus({ preventScroll: true })
+      textarea.setSelectionRange(range.start, range.end)
+      scrollTextareaToRange(textarea, range.start)
+    }
+
+    applySelection()
+    requestAnimationFrame(applySelection)
+    window.setTimeout(applySelection, 0)
+    window.setTimeout(applySelection, 100)
+
+    setHighlightedReqId(traceId)
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
+    highlightTimerRef.current = window.setTimeout(() => setHighlightedReqId(null), 4000)
+
+    return true
+  }, [requirements, inputType])
+
   const handleTraceClick = (traceId) => {
-    if (!traceId) return;
-    const textarea = document.getElementById("requirements-input");
-    if (!textarea) return;
+    if (!traceId) return
 
-    const text = textarea.value;
-    const reqNum = traceId.replace(/[^0-9]/g, "");
-    if (!reqNum) return;
-
-    const patterns = [
-      new RegExp(`(?:^|\\n)\\s*${reqNum}\\s*[\\.\\)]`, "i"),
-      new RegExp(`(?:^|\\n)\\s*REQ-?${reqNum}\\b`, "i")
-    ];
-
-    let match = null;
-    for (const pattern of patterns) {
-      match = text.match(pattern);
-      if (match) break;
-    }
-
-    if (match && match.index !== undefined) {
-      const start = match.index + (match[0].startsWith("\n") ? 1 : 0);
-      let end = text.indexOf("\n", start);
-      if (end === -1) end = text.length;
-
-      textarea.focus();
-      textarea.setSelectionRange(start, end);
-      addToast(`Highlighted requirement: ${traceId}`, "info");
+    if (applyRequirementHighlight(traceId)) {
+      window.setTimeout(() => addToast(`Highlighted requirement: ${traceId}`, "info"), 120)
     } else {
-      addToast(`Could not locate requirement line for ${traceId}`, "info");
+      addToast(`Could not locate requirement line for ${traceId}`, "info")
     }
-  };
+  }
 
   // Phase 5 Conversational Refinement
   const handleRefine = async (customPromptText) => {
@@ -643,7 +694,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requirements: sanitized }),
+        body: JSON.stringify({ requirements: sanitized, inputType }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`)
@@ -700,7 +751,6 @@ export default function App() {
     if (!sanitized) return
 
     setImproveLoading(true)
-    setPreviousRequirements(sanitized)
     try {
       const res = await fetch(`${API_BASE}/improve-requirements`, {
         method: "POST",
@@ -730,6 +780,37 @@ export default function App() {
     }
   }
 
+  const handleCoverageReview = async () => {
+    const sanitizedReq = sanitizeInput(requirements.trim())
+    const gherkin = (result || "").trim()
+    if (!sanitizedReq || !gherkin) {
+      addToast("Generate scenarios before reviewing coverage", "info")
+      return
+    }
+
+    setCoverageReviewLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/coverage-review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requirements: sanitizedReq,
+          gherkin,
+          inputType,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || "Coverage review failed")
+      setCoverageReview(data)
+      setRightPanelView("coverage")
+      addToast("Semantic coverage review complete", "success")
+    } catch (err) {
+      addToast(err.message || "Coverage review failed", "error")
+    } finally {
+      setCoverageReviewLoading(false)
+    }
+  }
+
   const handleClearInput = () => {
     if (!requirements.trim()) return
     setRequirements("")
@@ -737,24 +818,13 @@ export default function App() {
     setSelectedWarningIds([])
     setDismissedWarningIds([])
     setAcknowledgedWarningIds([])
+    setCoverageReview(null)
     addToast("Requirement input cleared", "info")
   }
 
-  const loadDemoRequirements = async () => {
-    try {
-      const res = await fetch("/demo/demo-requirements.txt")
-      const text = await res.text()
-      setRequirements(text)
-      setQualityAnalysis(null)
-      addToast("Demo requirements loaded", "success")
-    } catch {
-      addToast("Could not load demo file", "error")
-    }
-  }
-
   const runChangeImpact = async () => {
-    if (!previousRequirements.trim() || !requirements.trim()) {
-      addToast("Need both previous and current requirements", "error")
+    if (!requirementsChangedSinceGeneration) {
+      addToast("No requirement changes detected since scenarios were generated", "info")
       return
     }
     try {
@@ -762,7 +832,7 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          oldRequirements: sanitizeInput(previousRequirements),
+          oldRequirements: sanitizeInput(generatedBaselineRequirements),
           newRequirements: sanitizeInput(requirements),
         }),
       })
@@ -783,6 +853,7 @@ export default function App() {
         reqNumber: sessions.length + 1,
         title: sessionTitle(sanitized, sessions.length),
         requirements: sanitized,
+        inputType,
         result: generatedText,
         qualityAnalysis,
         versions: [{
@@ -818,6 +889,7 @@ export default function App() {
           ...s,
           title: sessionTitle(sanitized, sessions.indexOf(s)),
           requirements: sanitized,
+          inputType,
           result: generatedText,
           qualityAnalysis,
           versions: nextVersions,
@@ -845,6 +917,7 @@ export default function App() {
     setSelectedCategory("all")
     setRightPanelView("scenarios")
     setDiffViewOpen(false)
+    setCoverageReview(null)
     setLoading(true)
     setError("")
     setResult("")
@@ -856,7 +929,7 @@ export default function App() {
         const res = await fetch(`${API_BASE}/generate/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ requirements: sanitized }),
+          body: JSON.stringify({ requirements: sanitized, inputType }),
         })
         if (!res.ok) throw new Error(`Server error ${res.status}`)
         const reader = res.body.getReader()
@@ -884,7 +957,7 @@ export default function App() {
         const res = await fetch(`${API_BASE}/generate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ requirements: sanitized }),
+          body: JSON.stringify({ requirements: sanitized, inputType }),
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`)
@@ -907,6 +980,7 @@ export default function App() {
     const target = initializedVersions[initializedIndex] || initializedVersions[0]
 
     setRequirements(target.requirements)
+    setInputType(session.inputType || "requirements")
     setResult(target.result)
     const qa = session.qualityAnalysis || null
     setQualityAnalysis(qa)
@@ -917,6 +991,7 @@ export default function App() {
     setSelectedCategory("all")
     setRightPanelView("scenarios")
     setDiffViewOpen(false)
+    setCoverageReview(null)
     setActiveId(session.id)
   }
 
@@ -1001,288 +1076,12 @@ export default function App() {
     setExportOpen(true)
   }
 
-  // Parse Gherkin scenario titles (8.4)
-  const extractScenarios = (gherkinText) => {
-    if (!gherkinText) return []
-    const matches = []
-    const lines = gherkinText.split("\n")
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (trimmed.startsWith("Scenario:") || trimmed.startsWith("Scenario Outline:")) {
-        matches.push(trimmed.replace(/^Scenario:\s*/, "").replace(/^Scenario Outline:\s*/, "").trim())
-      }
-    }
-    return matches
-  }
-
-  // Generate HTML for PDF/Word exports (8.2 / 8.3 / 8.4 / 8.6)
-  /* eslint-disable-next-line no-unused-vars */
-  const generateExportHTML = (targetSessions, _mode) => {
-    // Generate Traceability Matrix rows
-    let matrixRows = ""
-    targetSessions.forEach((s, sIdx) => {
-      const scenarios = extractScenarios(s.result)
-      if (scenarios.length === 0) {
-        matrixRows += `
-          <tr>
-            <td><strong>REQ-${sIdx + 1}:</strong> ${s.title}</td>
-            <td><em>No scenarios generated</em></td>
-            <td><span class="status-badge status-uncovered">Uncovered</span></td>
-          </tr>
-        `
-      } else {
-        scenarios.forEach((sc, scIdx) => {
-          matrixRows += `
-            <tr>
-              ${scIdx === 0 ? `<td rowspan="${scenarios.length}"><strong>REQ-${sIdx + 1}:</strong> ${s.title}</td>` : ""}
-              <td>${sc}</td>
-              ${scIdx === 0 ? `<td rowspan="${scenarios.length}"><span class="status-badge status-covered">Covered</span></td>` : ""}
-            </tr>
-          `
-        })
-      }
-    })
-
-    const title = exportScope === "current" ? "Single Requirement Report" : "All Requirements Batch Report"
-
-    // Construct full HTML string
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>TestGPT Export - ${title}</title>
-        <style>
-          @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono&display=swap');
-          
-          body {
-            font-family: 'DM Sans', -apple-system, sans-serif;
-            color: #1F2937;
-            line-height: 1.6;
-            padding: 40px;
-            max-width: 800px;
-            margin: 0 auto;
-            background-color: #FFFFFF;
-          }
-          
-          h1 {
-            font-family: 'Space Grotesk', sans-serif;
-            font-size: 26px;
-            font-weight: 700;
-            color: #C8445D; /* Theme Warm Peach accent */
-            border-bottom: 2px solid #FEF0EC;
-            padding-bottom: 12px;
-            margin-bottom: 24px;
-          }
-          
-          h2 {
-            font-family: 'Space Grotesk', sans-serif;
-            font-size: 18px;
-            font-weight: 700;
-            color: #111827;
-            margin-top: 32px;
-            margin-bottom: 16px;
-          }
-
-          h3 {
-            font-size: 14px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #4B5563;
-            margin-top: 24px;
-            margin-bottom: 8px;
-          }
-          
-          .meta-box {
-            background-color: #FEF0EC;
-            border: 1px solid rgba(200, 68, 93, 0.1);
-            padding: 16px 20px;
-            border-radius: 8px;
-            font-size: 13.5px;
-            color: #5C5F66;
-            margin-bottom: 32px;
-          }
-          
-          .meta-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px 16px;
-          }
-          
-          .meta-item strong {
-            color: #111827;
-          }
-          
-          .req-section {
-            border: 1px solid #E5E7EB;
-            padding: 24px;
-            border-radius: 10px;
-            margin-bottom: 28px;
-            background-color: #FAFAFA;
-            page-break-inside: avoid;
-          }
-
-          .req-title {
-            font-size: 16px;
-            font-weight: 700;
-            color: #C8445D;
-            margin-bottom: 12px;
-          }
-          
-          .source-box {
-            background-color: #F3F4F6;
-            border-left: 3px solid #D1D5DB;
-            padding: 12px 16px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-            white-space: pre-wrap;
-            color: #374151;
-            margin-bottom: 20px;
-            border-radius: 0 6px 6px 0;
-          }
-
-          .gherkin-box {
-            background-color: #1E1E1E;
-            color: #D4D4D4;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12.5px;
-            padding: 20px;
-            border-radius: 8px;
-            white-space: pre-wrap;
-            line-height: 1.6;
-            margin-top: 12px;
-            border: 1px solid #2D2D2D;
-          }
-
-          /* Traceability Matrix Table */
-          .trace-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 16px;
-            margin-bottom: 32px;
-            page-break-inside: avoid;
-          }
-          
-          .trace-table th, .trace-table td {
-            border: 1px solid #E5E7EB;
-            padding: 10px 12px;
-            font-size: 13px;
-            text-align: left;
-          }
-          
-          .trace-table th {
-            background-color: #F9FAFB;
-            font-weight: 700;
-            color: #374151;
-          }
-          
-          .status-badge {
-            display: inline-block;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-          }
-          
-          .status-covered {
-            background-color: #ECFDF5;
-            color: #047857;
-          }
-          
-          .status-uncovered {
-            background-color: #FEF2F2;
-            color: #B91C1C;
-          }
-
-          .footer-note {
-            text-align: center;
-            font-size: 11px;
-            color: #9CA3AF;
-            margin-top: 60px;
-            border-top: 1px solid #F3F4F6;
-            padding-top: 16px;
-          }
-
-          @media print {
-            body {
-              padding: 20px;
-              font-size: 12pt;
-            }
-            .no-print {
-              display: none;
-            }
-          }
-        </style>
-      </head>
-      <body>
-        <h1>TestGPT Acceptance Scenarios Report</h1>
-        
-        ${includeMetadata ? `
-          <div class="meta-box">
-            <div class="meta-grid">
-              <div class="meta-item"><strong>Project Name:</strong> TestGPT</div>
-              <div class="meta-item"><strong>Export Date:</strong> ${new Date().toLocaleDateString()}</div>
-              <div class="meta-item"><strong>Export Time:</strong> ${new Date().toLocaleTimeString()}</div>
-              <div class="meta-item"><strong>Total Scenarios:</strong> ${targetSessions.reduce((acc, s) => acc + extractScenarios(s.result).length, 0)}</div>
-            </div>
-          </div>
-        ` : ""}
-
-        ${includeAmbiguityWarnings && qualityAnalysis?.warnings?.length ? `
-          <h2>Requirement Quality Warnings</h2>
-          <p><strong>Quality score:</strong> ${qualityAnalysis.qualityScore}/100 — ${qualityAnalysis.summary || ""}</p>
-          <ul>
-            ${qualityAnalysis.warnings.map(w => `<li><strong>${w.type}</strong> (${w.severity}): ${w.message} — ${w.suggestion || ""}</li>`).join("")}
-          </ul>
-        ` : ""}
-
-        ${includeTraceability ? `
-          <h2>Requirement Traceability Matrix</h2>
-          <table class="trace-table">
-            <thead>
-              <tr>
-                <th style="width: 35%">Requirement Source</th>
-                <th style="width: 45%">Generated Scenario</th>
-                <th style="width: 20%">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${matrixRows}
-            </tbody>
-          </table>
-        ` : ""}
-
-        <h2>Generated Gherkin Scenarios</h2>
-        
-        ${targetSessions.map((s, idx) => `
-          <div class="req-section">
-            <div class="req-title">REQ-${idx + 1}: ${s.title}</div>
-            
-            <h3>Source Requirement Girdisi</h3>
-            <div class="source-box" style="white-space: pre-wrap; font-family: monospace;">${s.requirements ? s.requirements.replace(/\n/g, "<br/>") : ""}</div>
-            
-            <h3>Generated Gherkin Tests</h3>
-            <div class="gherkin-box" style="white-space: pre-wrap; font-family: monospace; background-color: #1E1E1E; color: #D4D4D4; padding: 15px; border-radius: 6px; border: 1px solid #2D2D2D;">${s.result ? s.result.replace(/\n/g, "<br/>") : ""}</div>
-          </div>
-        `).join("")}
-
-        <div class="footer-note">
-          Generated automatically by TestGPT — BDD acceptance scenario test builder.
-        </div>
-      </body>
-      </html>
-    `
-  }
-
   // Trigger the actual file download/printing (8.1 / 8.2 / 8.3 / 8.7)
   const triggerExport = () => {
     // 1. Determine which sessions to export
     const targetSessions = exportScope === "current" 
       ? (activeSession ? [activeSession] : [])
-      : sessions;
+      : sessions
 
     if (targetSessions.length === 0) {
       addToast("No sessions found to export", "error")
@@ -1323,7 +1122,14 @@ export default function App() {
         return
       }
 
-      const htmlContent = generateExportHTML(targetSessions, "pdf")
+      const htmlContent = generateExportHTML(targetSessions, {
+        mode: "pdf",
+        exportScope,
+        includeMetadata,
+        includeTraceability,
+        includeAmbiguityWarnings,
+        qualityAnalysis,
+      })
       printWindow.document.write(htmlContent)
       printWindow.document.close()
       
@@ -1338,7 +1144,14 @@ export default function App() {
     } 
     else if (exportFormat === "docx") {
       // Assemble Word-compatible HTML and download as .doc
-      const htmlContent = generateExportHTML(targetSessions, "docx")
+      const htmlContent = generateExportHTML(targetSessions, {
+        mode: "docx",
+        exportScope,
+        includeMetadata,
+        includeTraceability,
+        includeAmbiguityWarnings,
+        qualityAnalysis,
+      })
       const blob = new Blob([htmlContent], { type: "application/msword;charset=utf-8" })
       const url  = URL.createObjectURL(blob)
       const a    = document.createElement("a")
@@ -1405,7 +1218,7 @@ export default function App() {
             </button>
           </div>
           <ul className="sidebar-list">
-            {sessions.map((s, sIdx) => (
+            {sessions.map((s) => (
               <li
                 key={s.id}
                 className={`sidebar-item ${s.id === activeId ? "sidebar-item-active" : ""}`}
@@ -1415,7 +1228,7 @@ export default function App() {
                 aria-current={s.id === activeId ? "true" : undefined}
                 onKeyDown={e => (e.key === "Enter" || e.key === " ") && loadSession(s)}
               >
-                <span className="sidebar-item-title">REQ-{sessions.length - sIdx}: {s.title}</span>
+                <span className="sidebar-item-title">{s.title}</span>
                 <button
                   className="sidebar-item-delete"
                   onClick={e => deleteSession(e, s.id)}
@@ -1438,9 +1251,55 @@ export default function App() {
               <div className="panel-header-title-row">
                 <h2>Requirements</h2>
               </div>
-              <p className="panel-subtitle" id="requirements-help">Paste requirements, user stories, use cases, or acceptance criteria.</p>
+              <p className="panel-subtitle" id="requirements-help">
+                {inputType === "use_case"
+                  ? "Describe the use case with actor, goal, flows, and exceptions."
+                  : inputType === "user_story"
+                    ? "Paste user stories with acceptance criteria."
+                    : "Paste requirements, user stories, use cases, or acceptance criteria."}
+              </p>
             </div>
             <div className="panel-input-body">
+              {requirementsChangedSinceGeneration && result && (
+                <div className="out-of-sync-banner" role="alert">
+                  <div className="out-of-sync-content">
+                    <strong>Requirements changed</strong>
+                    <p>Generated scenarios may be out of sync with the current input.</p>
+                  </div>
+                  <div className="out-of-sync-actions">
+                    <button type="button" className="btn btn-outline btn-sm" onClick={runChangeImpact}>
+                      Analyze Change Impact
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={handleCoverageReview}
+                      disabled={coverageReviewLoading}
+                    >
+                      {coverageReviewLoading ? "Reviewing…" : "Review Coverage"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="input-type-row">
+                <span className="field-label">Input type</span>
+                <div className="input-type-options" role="radiogroup" aria-label="Input type">
+                  {INPUT_TYPES.map((type) => (
+                    <label key={type.id} className={`input-type-option ${inputType === type.id ? "active" : ""}`}>
+                      <input
+                        type="radio"
+                        name="inputType"
+                        value={type.id}
+                        checked={inputType === type.id}
+                        onChange={() => setInputType(type.id)}
+                      />
+                      {type.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1457,9 +1316,6 @@ export default function App() {
                     type="button"
                   >
                     Upload File
-                  </button>
-                  <button type="button" className="btn-upload" onClick={loadDemoRequirements}>
-                    Load Demo
                   </button>
                   <button
                     type="button"
@@ -1494,19 +1350,26 @@ export default function App() {
 
               <label className="field-label" htmlFor="requirements-input">
                 Requirement text
+                {highlightedReqId && (
+                  <span className="req-highlight-badge">Showing {highlightedReqId}</span>
+                )}
               </label>
               <textarea
                 id="requirements-input"
-                className="requirements-textarea"
+                className={`requirements-textarea${highlightedReqId ? " requirements-textarea-highlighted" : ""}`}
                 value={requirements}
-                onChange={e => setRequirements(e.target.value)}
+                onChange={e => {
+                  setRequirements(e.target.value)
+                  if (coverageReview) setCoverageReview(null)
+                  if (highlightedReqId) setHighlightedReqId(null)
+                }}
                 onKeyDown={e => {
                   if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && requirements.trim() && !loading) {
                     e.preventDefault()
                     handleGenerate()
                   }
                 }}
-                placeholder={"1. Users must be able to register with email and password.\n2. After registration, a confirmation email should be sent.\n3. Users must be able to log in with their credentials."}
+                placeholder={INPUT_TYPE_PLACEHOLDERS[inputType] || INPUT_TYPE_PLACEHOLDERS.requirements}
                 aria-label="Software requirements input"
                 aria-describedby="requirements-help"
               />
@@ -1644,6 +1507,61 @@ export default function App() {
 
                       {qualityAnalysis.summary && (
                         <p className="quality-summary">{qualityAnalysis.summary}</p>
+                      )}
+
+                      {(qualityAnalysis.behaviors?.length > 0 ||
+                        qualityAnalysis.businessRules?.length > 0 ||
+                        qualityAnalysis.assumptions?.length > 0) && (
+                        <div className="analysis-artifacts">
+                          {qualityAnalysis.behaviors?.length > 0 && (
+                            <section className="analysis-artifact-section">
+                              <h4 className="analysis-artifact-title">Detected Behaviors</h4>
+                              <ul className="analysis-artifact-list">
+                                {qualityAnalysis.behaviors.map((b) => (
+                                  <li key={b.id}>
+                                    <span className="analysis-artifact-id">{b.id}</span>
+                                    {b.requirementRef && (
+                                      <span className="analysis-artifact-ref">{b.requirementRef}</span>
+                                    )}
+                                    <span>{b.description}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </section>
+                          )}
+                          {qualityAnalysis.businessRules?.length > 0 && (
+                            <section className="analysis-artifact-section">
+                              <h4 className="analysis-artifact-title">Business Rules</h4>
+                              <ul className="analysis-artifact-list">
+                                {qualityAnalysis.businessRules.map((r) => (
+                                  <li key={r.id}>
+                                    <span className="analysis-artifact-id">{r.id}</span>
+                                    {r.requirementRef && (
+                                      <span className="analysis-artifact-ref">{r.requirementRef}</span>
+                                    )}
+                                    <span>{r.rule}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </section>
+                          )}
+                          {qualityAnalysis.assumptions?.length > 0 && (
+                            <section className="analysis-artifact-section">
+                              <h4 className="analysis-artifact-title">Assumptions</h4>
+                              <ul className="analysis-artifact-list">
+                                {qualityAnalysis.assumptions.map((a) => (
+                                  <li key={a.id}>
+                                    <span className="analysis-artifact-id">{a.id}</span>
+                                    {a.requirementRef && (
+                                      <span className="analysis-artifact-ref">{a.requirementRef}</span>
+                                    )}
+                                    <span>{a.assumption}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </section>
+                          )}
+                        </div>
                       )}
 
                       {acknowledgedWarningIds.length > 0 && (
@@ -1785,21 +1703,19 @@ export default function App() {
                   </div>
                 )}
               </div>
-              {(requirements.trim() || previousRequirements) && (
+              {requirementsChangedSinceGeneration && (
                 <div className="panel-header-actions-row">
-                  {requirements.trim() && (
-                    <button type="button" className="btn btn-ghost btn-sm change-impact-btn" onClick={() => {
-                      setPreviousRequirements(requirements)
-                      addToast("Snapshot saved. Edit requirements, then run Change Impact.", "info")
-                    }}>
-                      Snapshot for Change Impact
-                    </button>
-                  )}
-                  {previousRequirements && (
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={runChangeImpact}>
-                      Run Change Impact
-                    </button>
-                  )}
+                  <button type="button" className="btn btn-ghost btn-sm change-impact-btn" onClick={runChangeImpact}>
+                    Analyze Change Impact
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm change-impact-btn"
+                    onClick={handleCoverageReview}
+                    disabled={coverageReviewLoading || !result}
+                  >
+                    {coverageReviewLoading ? "Reviewing…" : "Review Coverage"}
+                  </button>
                 </div>
               )}
               <p className="panel-subtitle">
@@ -1832,8 +1748,67 @@ export default function App() {
 
               {result && !loading && rightPanelView === "coverage" && (
                 <div className="coverage-summary-container">
-                  <p className="coverage-summary-legend">
-                    Status per flow type: Complete (has scenario), Partial (other scenarios exist), Not covered (none).
+                  <div className="coverage-toolbar">
+                    <p className="coverage-summary-legend">
+                      Tag-based coverage below. Run semantic review for AI rationale on whether scenarios truly test each requirement.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={handleCoverageReview}
+                      disabled={coverageReviewLoading}
+                    >
+                      {coverageReviewLoading ? "Reviewing…" : "Review Coverage"}
+                    </button>
+                  </div>
+
+                  {coverageReview && (
+                    <section className="semantic-coverage-panel" aria-label="Semantic coverage review">
+                      <h3 className="semantic-coverage-title">Semantic Coverage Review</h3>
+                      {coverageReview.summary && (
+                        <p className="semantic-coverage-summary">{coverageReview.summary}</p>
+                      )}
+                      <div className="semantic-coverage-scroll">
+                        <table className="semantic-coverage-table">
+                          <thead>
+                            <tr>
+                              <th>Requirement</th>
+                              <th>Status</th>
+                              <th>Rationale</th>
+                              <th>Missing Flows</th>
+                              <th>Scenarios</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(coverageReview.reviews || []).map((review) => (
+                              <tr key={review.requirementRef}>
+                                <td>{review.requirementRef}</td>
+                                <td>
+                                  <span className={`semantic-status semantic-status-${review.status}`}>
+                                    {review.status?.replace("_", " ")}
+                                  </span>
+                                </td>
+                                <td className="semantic-rationale">{review.rationale}</td>
+                                <td>
+                                  {(review.missingFlows || []).length > 0
+                                    ? review.missingFlows.join(", ")
+                                    : "—"}
+                                </td>
+                                <td>
+                                  {(review.scenarioRefs || []).length > 0
+                                    ? review.scenarioRefs.join("; ")
+                                    : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  )}
+
+                  <p className="coverage-summary-legend coverage-tag-legend">
+                    Tag-based status per flow type: Complete (has scenario), Partial (other scenarios exist), Not covered (none).
                     Overall uses all four flow types for the requirement.
                   </p>
                   <div className="coverage-summary-scroll">
@@ -1848,7 +1823,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {buildCoverageSummary(requirements, result).map((row) => (
+                        {buildCoverageSummary(requirements, result, inputType).map((row) => (
                           <tr key={row.requirement.id}>
                             <td className="coverage-req-cell">
                               <button
@@ -1894,7 +1869,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {buildCoverageMatrix(requirements, result).map(row => (
+                      {buildCoverageMatrix(requirements, result, inputType).map(row => (
                         <tr key={row.requirement.id} className={row.covered ? "trace-row-covered" : "trace-row-uncovered"}>
                           <td>
                             <button
