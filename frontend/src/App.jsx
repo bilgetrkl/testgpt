@@ -1,6 +1,22 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import mammoth from "mammoth"
+import {
+  parseGherkin,
+  serializeGherkin,
+  syncTagsForType,
+  computeLineDiff,
+  sanitizeInput,
+  isValidGherkin,
+  buildCoverageMatrix,
+  buildCoverageSummary,
+  COVERAGE_FLOW_TYPES,
+  coverageStatusLabel,
+  isMajorWarning,
+  warningTypeLabel,
+} from "./gherkinUtils.js"
 import "./App.css"
+
+const API_BASE = "http://localhost:8000"
 
 // ── Gherkin Highlighter ───────────────────────────────────────
 function classForLine(line) {
@@ -28,170 +44,6 @@ function GherkinBlock({ text }) {
   )
 }
 
-// ── Gherkin Parser & Serializer Functions ────────────────────
-function parseGherkin(text) {
-  if (!text) return { featureHeader: "", scenarios: [] };
-  const lines = text.split("\n");
-  let featureHeaderLines = [];
-  let scenarios = [];
-  let currentScenario = null;
-  let currentTags = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    if (trimmed.startsWith("@")) {
-      const tagsInLine = trimmed.split(/\s+/).filter(t => t.startsWith("@"));
-      currentTags.push(...tagsInLine);
-      continue;
-    }
-
-    if (trimmed.startsWith("Scenario:") || trimmed.startsWith("Scenario Outline:")) {
-      if (currentScenario) {
-        while (currentScenario.steps.length > 0 && currentScenario.steps[currentScenario.steps.length - 1].trim() === "") {
-          currentScenario.steps.pop();
-        }
-        scenarios.push(currentScenario);
-      }
-      const isOutline = trimmed.startsWith("Scenario Outline:");
-      const prefix = isOutline ? "Scenario Outline:" : "Scenario:";
-      const title = trimmed.substring(prefix.length).trim();
-
-      const traceTag = currentTags.find(tag => /^@REQ-?[a-zA-Z0-9_-]+$/i.test(tag));
-      let traceId = null;
-      if (traceTag) {
-        const cleaned = traceTag.substring(1).toUpperCase();
-        traceId = cleaned.startsWith("REQ-") ? cleaned : `REQ-${cleaned.replace("REQ", "")}`;
-      }
-
-      currentScenario = {
-        id: `sc-${scenarios.length}-${title.replace(/[^a-zA-Z0-9]/g, "").slice(0, 15).toLowerCase()}`,
-        title: title,
-        isOutline: isOutline,
-        tags: [...currentTags],
-        traceId: traceId,
-        steps: [],
-        type: determineScenarioType(title, currentTags)
-      };
-      currentTags = [];
-      continue;
-    }
-
-    if (!currentScenario) {
-      featureHeaderLines.push(line);
-    } else {
-      currentScenario.steps.push(line);
-    }
-  }
-
-  if (currentScenario) {
-    while (currentScenario.steps.length > 0 && currentScenario.steps[currentScenario.steps.length - 1].trim() === "") {
-      currentScenario.steps.pop();
-    }
-    scenarios.push(currentScenario);
-  }
-
-  return {
-    featureHeader: featureHeaderLines.join("\n"),
-    scenarios: scenarios
-  };
-}
-
-function determineScenarioType(title, tags) {
-  const allTagsText = tags.join(" ").toLowerCase();
-  const titleLower = title.toLowerCase();
-
-  if (allTagsText.includes("happy") || allTagsText.includes("success")) return "happy-path";
-  if (allTagsText.includes("edge") || allTagsText.includes("boundary")) return "edge-case";
-  if (allTagsText.includes("negative") || allTagsText.includes("fail") || allTagsText.includes("error")) return "negative";
-
-  if (titleLower.includes("happy path") || titleLower.includes("successful") || titleLower.includes("happy-path")) return "happy-path";
-  if (titleLower.includes("edge case") || titleLower.includes("boundary") || titleLower.includes("edge-case")) return "edge-case";
-  if (titleLower.includes("negative") || titleLower.includes("fail") || titleLower.includes("error") || titleLower.includes("invalid")) return "negative";
-
-  return "other";
-}
-
-function syncTagsForType(tags, type) {
-  let newTags = tags.filter(t => 
-    t !== "@happy-path" && t !== "@happy_path" && t !== "@happy" &&
-    t !== "@edge-case" && t !== "@edge_case" && t !== "@edge" &&
-    t !== "@negative" && t !== "@negative-scenario" && t !== "@negative_scenario"
-  );
-  
-  if (type === "happy-path") newTags.push("@happy-path");
-  else if (type === "edge-case") newTags.push("@edge-case");
-  else if (type === "negative") newTags.push("@negative");
-  
-  return newTags;
-}
-
-function serializeGherkin(featureHeader, scenarios) {
-  let text = "";
-  if (featureHeader) {
-    text += featureHeader.trimEnd() + "\n\n";
-  }
-
-  scenarios.forEach(sc => {
-    if (sc.tags && sc.tags.length > 0) {
-      text += "  " + sc.tags.join(" ") + "\n";
-    }
-    const prefix = sc.isOutline ? "Scenario Outline" : "Scenario";
-    text += `  ${prefix}: ${sc.title}\n`;
-    if (sc.steps && sc.steps.length > 0) {
-      sc.steps.forEach(step => {
-        const trimmedStep = step.trim();
-        if (trimmedStep) {
-          text += `    ${trimmedStep}\n`;
-        } else {
-          text += "\n";
-        }
-      });
-    }
-    text += "\n";
-  });
-  return text.trim() + "\n";
-}
-
-// ── LCS Line-by-line Gherkin Diff Engine (Phase 5.6) ──────────
-function computeLineDiff(original, current) {
-  const origLines = (original || "").split("\n");
-  const currLines = (current || "").split("\n");
-
-  const dp = Array(origLines.length + 1).fill(null).map(() => Array(currLines.length + 1).fill(0));
-
-  for (let i = 1; i <= origLines.length; i++) {
-    for (let j = 1; j <= currLines.length; j++) {
-      if (origLines[i - 1].trim() === currLines[j - 1].trim()) {
-        dp[i][j] = dp[i - 1][j - 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-  }
-
-  let i = origLines.length;
-  let j = currLines.length;
-  const diff = [];
-
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && origLines[i - 1].trim() === currLines[j - 1].trim()) {
-      diff.unshift({ type: "unchanged", text: currLines[j - 1] });
-      i--;
-      j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      diff.unshift({ type: "added", text: currLines[j - 1] });
-      j--;
-    } else {
-      diff.unshift({ type: "removed", text: origLines[i - 1] });
-      i--;
-    }
-  }
-
-  return diff;
-}
-
 // ── Skeleton ──────────────────────────────────────────────────
 function Skeleton() {
   return (
@@ -217,9 +69,9 @@ function Toast({ message, type, onClose }) {
     return () => clearTimeout(t)
   }, [onClose])
   return (
-    <div className={`toast toast-${type}`}>
+    <div className={`toast toast-${type}`} role="status" aria-live="polite">
       <span>{message}</span>
-      <button className="toast-close" onClick={onClose}>✕</button>
+      <button type="button" className="toast-close" onClick={onClose} aria-label="Close notification">Close</button>
     </div>
   )
 }
@@ -229,43 +81,6 @@ function sessionTitle(requirements, index) {
   /* eslint-disable-next-line no-useless-escape */
   const firstLine = requirements.trim().split("\n")[0].replace(/^\d+[\.\)]\s*/, "").trim()
   return firstLine.length > 36 ? firstLine.slice(0, 36) + "…" : firstLine || `Session ${index + 1}`
-}
-
-// ── Input Sanitizer ───────────────────────────────────────────
-function sanitizeInput(text) {
-  if (!text) return ""
-  
-  // 1. Remove dangerous control/non-printable ASCII characters (keep newlines/tabs)
-  /* eslint-disable-next-line no-control-regex */
-  let clean = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "")
-
-  // 2. Strip script tags entirely to prevent prompt injection XSS
-  clean = clean.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
-  
-  // 3. Escape basic HTML tags to render them safely as text
-  clean = clean.replace(/</g, "&lt;").replace(/>/g, "&gt;")
-
-  // 4. Prevent excessive consecutive blank lines (max 3 successive breaks)
-  clean = clean.replace(/\n{4,}/g, "\n\n\n")
-
-  // 5. Trim trailing whitespace from each line and overall text
-  clean = clean.split("\n").map(line => line.trimEnd()).join("\n").trim()
-
-  return clean;
-}
-
-// ── Gherkin Validator (3.6) ──────────────────────────────────
-function isValidGherkin(text) {
-  if (!text) return false
-  const lower = text.toLowerCase()
-  // Check for core Gherkin keywords
-  return (
-    lower.includes("feature:") || 
-    lower.includes("scenario:") || 
-    lower.includes("given ") || 
-    lower.includes("when ") || 
-    lower.includes("then ")
-  )
 }
 
 // ── Scenario Card Component ──────────────────────────────────
@@ -284,6 +99,7 @@ function ScenarioCard({
   const [editedTitle, setEditedTitle] = useState(scenario.title);
   const [editedSteps, setEditedSteps] = useState(scenario.steps.join("\n"));
   const [editedType, setEditedType] = useState(scenario.type);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   // Sync state when entering edit mode
   /* eslint-disable react-hooks/set-state-in-effect */
@@ -306,6 +122,7 @@ function ScenarioCard({
 
   const badgeText = {
     "happy-path": "Happy Path",
+    "alternative-flow": "Alternative Flow",
     "edge-case": "Edge Case",
     "negative": "Negative Scenario",
     "other": "Other"
@@ -315,6 +132,7 @@ function ScenarioCard({
     const lower = t.toLowerCase();
     return !lower.startsWith("@req") && 
            lower !== "@happy-path" && lower !== "@happy_path" && lower !== "@happy" &&
+           lower !== "@alternative-flow" && lower !== "@alternative_flow" && lower !== "@alternative" &&
            lower !== "@edge-case" && lower !== "@edge_case" && lower !== "@edge" &&
            lower !== "@negative" && lower !== "@negative-scenario" && lower !== "@negative_scenario";
   });
@@ -336,7 +154,7 @@ function ScenarioCard({
         <div className="scenario-edit-field">
           <label className="scenario-edit-label">Category</label>
           <div className="scenario-type-buttons">
-            {["happy-path", "edge-case", "negative"].map(t => (
+            {["happy-path", "alternative-flow", "edge-case", "negative"].map(t => (
               <button
                 key={t}
                 type="button"
@@ -344,6 +162,7 @@ function ScenarioCard({
                 onClick={() => setEditedType(t)}
               >
                 {t === "happy-path" && "Happy Path"}
+                {t === "alternative-flow" && "Alternative"}
                 {t === "edge-case" && "Edge Case"}
                 {t === "negative" && "Negative"}
               </button>
@@ -384,7 +203,7 @@ function ScenarioCard({
           <span className={`scenario-badge badge-${scenario.type}`}>
             {badgeText}
           </span>
-          {displayTags.length > 0 && (
+          {detailsOpen && displayTags.length > 0 && (
             <div className="scenario-tags">
               {displayTags.map((tag, idx) => (
                 <span key={idx} className="scenario-tag">{tag}</span>
@@ -398,59 +217,71 @@ function ScenarioCard({
             onClick={() => onTraceClick(scenario.traceId || `REQ-${requirementIndex}`)}
             title={`Click to highlight requirement ${scenario.traceId || `REQ-${requirementIndex}`} in left panel`}
           >
-            🔗 Traces to {scenario.traceId || `REQ-${requirementIndex}`}
+            Trace to {scenario.traceId || `REQ-${requirementIndex}`}
           </button>
           <button 
-            className="btn-card-edit" 
+            type="button"
+            className="btn-card-text btn-card-edit" 
             onClick={() => onEdit(scenario.id)}
-            title="Edit scenario"
             aria-label="Edit scenario"
           >
-            ✏️
+            Edit
           </button>
           <button 
-            className="btn-card-delete" 
+            type="button"
+            className="btn-card-text btn-card-delete" 
             onClick={() => onDelete(scenario.id)}
-            title="Delete scenario"
             aria-label="Delete scenario"
           >
-            ✕
+            Delete
           </button>
         </div>
       </div>
 
-      <h3 className="scenario-title">
-        {scenario.isOutline ? "Scenario Outline: " : "Scenario: "}
-        {scenario.title}
-      </h3>
+      <button
+        type="button"
+        className="scenario-title scenario-title-toggle"
+        onClick={() => setDetailsOpen(open => !open)}
+        aria-expanded={detailsOpen}
+        aria-label={`${detailsOpen ? "Hide" : "Show"} details for ${scenario.title}`}
+      >
+        <span>{scenario.isOutline ? "Scenario Outline: " : "Scenario: "}{scenario.title}</span>
+        <span className={`scenario-toggle-indicator ${detailsOpen ? "is-open" : "is-closed"}`} aria-hidden="true" />
+      </button>
 
-      <div className="scenario-steps">
-        <pre className="scenario-steps-pre">
-          {scenario.steps.map((line, i) => (
-            <span key={i} className={classForLine(line)}>
-              {line || " "}
-              {"\n"}
-            </span>
-          ))}
-        </pre>
-      </div>
+      {detailsOpen && (
+        <>
+          <div className="scenario-steps">
+            <pre className="scenario-steps-pre">
+              {scenario.steps.map((line, i) => (
+                <span key={i} className={classForLine(line)}>
+                  {line || " "}
+                  {"\n"}
+                </span>
+              ))}
+            </pre>
+          </div>
 
-      <div className="scenario-card-footer-actions">
-        <button 
-          className="btn-quick-action" 
-          onClick={() => onQuickAction("simplify", scenario.title)}
-          title="Simplify this scenario's Gherkin steps via AI"
-        >
-          🪄 Simplify Steps
-        </button>
-        <button 
-          className="btn-quick-action" 
-          onClick={() => onQuickAction("detailed", scenario.title)}
-          title="Make this scenario more detailed via AI"
-        >
-          🔍 Add Details
-        </button>
-      </div>
+          <div className="scenario-card-footer-actions">
+            <button 
+              type="button"
+              className="btn-quick-action" 
+              onClick={() => onQuickAction("simplify", scenario.title)}
+              title="Simplify Gherkin steps for this scenario"
+            >
+              Simplify steps
+            </button>
+            <button 
+              type="button"
+              className="btn-quick-action" 
+              onClick={() => onQuickAction("detailed", scenario.title)}
+              title="Add more detail to Gherkin steps for this scenario"
+            >
+              Expand steps
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -476,6 +307,20 @@ export default function App() {
   const [exportScope, setExportScope] = useState("current") // "current", "all"
   const [includeMetadata, setIncludeMetadata] = useState(true)
   const [includeTraceability, setIncludeTraceability] = useState(true)
+  const [includeAmbiguityWarnings, setIncludeAmbiguityWarnings] = useState(true)
+
+  const [qualityAnalysis, setQualityAnalysis] = useState(null)
+  const [qualityPanelOpen, setQualityPanelOpen] = useState(true)
+  const [analyzeLoading, setAnalyzeLoading] = useState(false)
+  const [improveLoading, setImproveLoading] = useState(false)
+  const [dismissedWarningIds, setDismissedWarningIds] = useState([])
+  const [acknowledgedWarningIds, setAcknowledgedWarningIds] = useState([])
+  const [selectedWarningIds, setSelectedWarningIds] = useState([])
+  const [rightPanelView, setRightPanelView] = useState("scenarios") // scenarios | coverage | matrix
+  const [useStreaming, setUseStreaming] = useState(false)
+  const [changeImpactOpen, setChangeImpactOpen] = useState(false)
+  const [changeImpactResult, setChangeImpactResult] = useState(null)
+  const [previousRequirements, setPreviousRequirements] = useState("")
   
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [suggestions, setSuggestions] = useState([])
@@ -506,7 +351,6 @@ export default function App() {
   const activeSession = sessions.find(s => s.id === activeId)
   const activeVersionIdx = activeSession ? (activeSession.activeVersionIndex || 0) : 0
   const totalVersions = activeSession && activeSession.versions ? activeSession.versions.length : 1
-  const isEdited = activeSession && requirements.trim() !== (activeSession.versions?.[activeVersionIdx]?.requirements || activeSession.requirements).trim()
 
   // Persist sessions to localStorage
   useEffect(() => {
@@ -516,11 +360,6 @@ export default function App() {
   useEffect(() => {
     if (activeId) localStorage.setItem("testgpt-active-id", activeId)
     else localStorage.removeItem("testgpt-active-id")
-  }, [activeId])
-
-  // Reset diff view when active session changes
-  useEffect(() => {
-    setDiffViewOpen(false)
   }, [activeId])
 
   // Restore active session on page load
@@ -653,6 +492,7 @@ export default function App() {
     setForceShowRaw(false)
     setActiveEditId(null)
     setSelectedCategory("all")
+    setDiffViewOpen(false)
     addToast("Started a new session", "success")
   }
 
@@ -744,7 +584,7 @@ export default function App() {
     ]
 
     try {
-      const res = await fetch("http://localhost:8000/refine", {
+      const res = await fetch(`${API_BASE}/refine`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: updatedMessages }),
@@ -765,7 +605,7 @@ export default function App() {
               requirements: activeSession.requirements,
               result: data.result,
               timestamp: Date.now(),
-              versionType: customPromptText ? "quick-action" : "ai-refinement",
+              versionType: customPromptText ? "quick-action" : "refinement",
               messages: completeMessages
             }
           ]
@@ -794,91 +634,266 @@ export default function App() {
     }
   }
 
-  // Generate & save to session
+  const handleAnalyze = async () => {
+    const rawInput = requirements.trim()
+    if (!rawInput) return
+    const sanitized = sanitizeInput(rawInput)
+    setAnalyzeLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requirements: sanitized }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`)
+      setQualityAnalysis(data)
+      setDismissedWarningIds([])
+      setAcknowledgedWarningIds([])
+      setSelectedWarningIds((data.warnings || []).map(w => w.id))
+      setQualityPanelOpen(true)
+      if (activeId) {
+        setSessions(prev => prev.map(s =>
+          s.id === activeId ? { ...s, qualityAnalysis: data } : s
+        ))
+      }
+      addToast(`Quality score: ${data.qualityScore}/100`, "info")
+    } catch (err) {
+      addToast(err.message || "Analysis failed", "error")
+    } finally {
+      setAnalyzeLoading(false)
+    }
+  }
+
+  const dismissWarning = (id) => {
+    setDismissedWarningIds(prev => [...prev, id])
+    setSelectedWarningIds(prev => prev.filter(x => x !== id))
+  }
+
+  const acknowledgeWarning = (id) => {
+    setAcknowledgedWarningIds(prev => [...prev, id])
+    setDismissedWarningIds(prev => [...prev, id])
+    setSelectedWarningIds(prev => prev.filter(x => x !== id))
+  }
+
+  const toggleWarningSelection = (id) => {
+    setSelectedWarningIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    )
+  }
+
+  const handleImproveFromWarnings = async () => {
+    if (!qualityAnalysis?.warnings?.length) {
+      addToast("Run Analyze Requirements first", "error")
+      return
+    }
+    const activeWarnings = (qualityAnalysis.warnings || []).filter(
+      w => !dismissedWarningIds.includes(w.id) && !acknowledgedWarningIds.includes(w.id)
+    )
+    const warningsToFix = activeWarnings.filter(w => selectedWarningIds.includes(w.id))
+    if (warningsToFix.length === 0) {
+      addToast("Select at least one warning to apply", "info")
+      return
+    }
+
+    const sanitized = sanitizeInput(requirements.trim())
+    if (!sanitized) return
+
+    setImproveLoading(true)
+    setPreviousRequirements(sanitized)
+    try {
+      const res = await fetch(`${API_BASE}/improve-requirements`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requirements: sanitized, warnings: warningsToFix }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`)
+
+      const improved = sanitizeInput(data.requirements)
+      const appliedIds = new Set(warningsToFix.map(w => w.id))
+      setRequirements(improved)
+      setQualityAnalysis(prev => {
+        if (!prev) return prev
+        const remaining = (prev.warnings || []).filter(w => !appliedIds.has(w.id))
+        return { ...prev, warnings: remaining }
+      })
+      setSelectedWarningIds(prev => prev.filter(id => !appliedIds.has(id)))
+      addToast(
+        `Applied ${warningsToFix.length} selected suggestion(s). Re-run Analyze to refresh the score.`,
+        "success"
+      )
+    } catch (err) {
+      addToast(err.message || "Could not improve requirements", "error")
+    } finally {
+      setImproveLoading(false)
+    }
+  }
+
+  const handleClearInput = () => {
+    if (!requirements.trim()) return
+    setRequirements("")
+    setQualityAnalysis(null)
+    setSelectedWarningIds([])
+    setDismissedWarningIds([])
+    setAcknowledgedWarningIds([])
+    addToast("Requirement input cleared", "info")
+  }
+
+  const loadDemoRequirements = async () => {
+    try {
+      const res = await fetch("/demo/demo-requirements.txt")
+      const text = await res.text()
+      setRequirements(text)
+      setQualityAnalysis(null)
+      addToast("Demo requirements loaded", "success")
+    } catch {
+      addToast("Could not load demo file", "error")
+    }
+  }
+
+  const runChangeImpact = async () => {
+    if (!previousRequirements.trim() || !requirements.trim()) {
+      addToast("Need both previous and current requirements", "error")
+      return
+    }
+    try {
+      const res = await fetch(`${API_BASE}/change-impact`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          oldRequirements: sanitizeInput(previousRequirements),
+          newRequirements: sanitizeInput(requirements),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || "Change-impact failed")
+      setChangeImpactResult(data)
+      setChangeImpactOpen(true)
+    } catch (err) {
+      addToast(err.message || "Change-impact failed", "error")
+    }
+  }
+
+  const persistGeneratedResult = (sanitized, generatedText) => {
+    setResult(generatedText)
+    if (activeId === null) {
+      const newSession = {
+        id: Date.now(),
+        reqNumber: sessions.length + 1,
+        title: sessionTitle(sanitized, sessions.length),
+        requirements: sanitized,
+        result: generatedText,
+        qualityAnalysis,
+        versions: [{
+          requirements: sanitized,
+          result: generatedText,
+          timestamp: Date.now(),
+          messages: [
+            { role: "user", content: `Generate Gherkin acceptance tests for these requirements:\n\n${sanitized}` },
+            { role: "assistant", content: generatedText },
+          ],
+        }],
+        activeVersionIndex: 0,
+      }
+      setSessions(prev => [newSession, ...prev])
+      setActiveId(newSession.id)
+      setSidebarOpen(true)
+      addToast("Tests generated!", "success")
+    } else {
+      const updatedSessions = sessions.map(s => {
+        if (s.id !== activeId) return s
+        const currentVersions = s.versions || [{ requirements: s.requirements, result: s.result, timestamp: s.id }]
+        const newVersion = {
+          requirements: sanitized,
+          result: generatedText,
+          timestamp: Date.now(),
+          messages: [
+            { role: "user", content: `Generate Gherkin acceptance tests for these requirements:\n\n${sanitized}` },
+            { role: "assistant", content: generatedText },
+          ],
+        }
+        const nextVersions = [...currentVersions, newVersion]
+        return {
+          ...s,
+          title: sessionTitle(sanitized, sessions.indexOf(s)),
+          requirements: sanitized,
+          result: generatedText,
+          qualityAnalysis,
+          versions: nextVersions,
+          activeVersionIndex: nextVersions.length - 1,
+        }
+      })
+      setSessions(updatedSessions)
+      addToast("Updated session with new version!", "success")
+    }
+  }
+
   const handleGenerate = async () => {
     const rawInput = requirements.trim()
     if (!rawInput) return
-    
-    // Sanitize input (2.6)
+
     const sanitized = sanitizeInput(rawInput)
     if (!sanitized) {
       addToast("Input is invalid after sanitization", "error")
       return
     }
-    
-    // Update the UI and localStorage state with sanitized text
+
     setRequirements(sanitized)
-    
     setForceShowRaw(false)
     setActiveEditId(null)
     setSelectedCategory("all")
-    setLoading(true); setError(""); setResult("")
-    try {
-      const res = await fetch("http://localhost:8000/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requirements: sanitized }),
-      })
-      if (!res.ok) throw new Error(`Server error ${res.status}`)
-      const data = await res.json()
-      setResult(data.result)
+    setRightPanelView("scenarios")
+    setDiffViewOpen(false)
+    setLoading(true)
+    setError("")
+    setResult("")
 
-      if (activeId === null) {
-        // Create a completely new session (Draft -> Active)
-        const newSession = {
-          id: Date.now(),
-          reqNumber: sessions.length + 1,
-          title: sessionTitle(sanitized, sessions.length),
-          requirements: sanitized,
-          result: data.result,
-          versions: [{ 
-            requirements: sanitized, 
-            result: data.result, 
-            timestamp: Date.now(),
-            messages: [
-              { role: "user", content: `Generate Gherkin acceptance tests for these requirements:\n\n${sanitized}` },
-              { role: "assistant", content: data.result }
-            ]
-          }],
-          activeVersionIndex: 0
-        }
-        setSessions(prev => [newSession, ...prev])
-        setActiveId(newSession.id)
-        setSidebarOpen(true)
-        addToast("Tests generated!", "success")
-      } else {
-        // Update an existing active session (Add new version - 2.8)
-        const updatedSessions = sessions.map(s => {
-          if (s.id === activeId) {
-            const currentVersions = s.versions || [{ requirements: s.requirements, result: s.result, timestamp: s.id }]
-            const newVersion = { 
-              requirements: sanitized, 
-              result: data.result, 
-              timestamp: Date.now(),
-              messages: [
-                { role: "user", content: `Generate Gherkin acceptance tests for these requirements:\n\n${sanitized}` },
-                { role: "assistant", content: data.result }
-              ]
-            }
-            const nextVersions = [...currentVersions, newVersion]
-            const nextIndex = nextVersions.length - 1
-            
-            return {
-              ...s,
-              title: sessionTitle(sanitized, sessions.indexOf(s)),
-              requirements: sanitized,
-              result: data.result,
-              versions: nextVersions,
-              activeVersionIndex: nextIndex
+    try {
+      let generatedText = ""
+
+      if (useStreaming) {
+        const res = await fetch(`${API_BASE}/generate/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ requirements: sanitized }),
+        })
+        if (!res.ok) throw new Error(`Server error ${res.status}`)
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const parts = buffer.split("\n\n")
+          buffer = parts.pop() || ""
+          for (const part of parts) {
+            const line = part.trim()
+            if (!line.startsWith("data:")) continue
+            const payload = JSON.parse(line.slice(5).trim())
+            if (payload.error) throw new Error(payload.error)
+            if (payload.token) {
+              generatedText += payload.token
+              setResult(generatedText)
             }
           }
-          return s
+        }
+        generatedText = generatedText.replace(/```[\s\S]*?```/g, "").trim()
+      } else {
+        const res = await fetch(`${API_BASE}/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ requirements: sanitized }),
         })
-        setSessions(updatedSessions)
-        addToast("Updated session with new version!", "success")
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`)
+        generatedText = data.result
       }
-    } catch {
-      setError("Could not reach the backend. Make sure it's running on port 8000.")
+
+      persistGeneratedResult(sanitized, generatedText)
+    } catch (err) {
+      setError(err.message || "Could not reach the backend. Make sure it's running on port 8000.")
       addToast("Generation failed", "error")
     } finally {
       setLoading(false)
@@ -893,10 +908,15 @@ export default function App() {
 
     setRequirements(target.requirements)
     setResult(target.result)
+    const qa = session.qualityAnalysis || null
+    setQualityAnalysis(qa)
+    setSelectedWarningIds(qa?.warnings?.map(w => w.id) || [])
     setError("")
     setForceShowRaw(false)
     setActiveEditId(null)
     setSelectedCategory("all")
+    setRightPanelView("scenarios")
+    setDiffViewOpen(false)
     setActiveId(session.id)
   }
 
@@ -1211,6 +1231,14 @@ export default function App() {
           </div>
         ` : ""}
 
+        ${includeAmbiguityWarnings && qualityAnalysis?.warnings?.length ? `
+          <h2>Requirement Quality Warnings</h2>
+          <p><strong>Quality score:</strong> ${qualityAnalysis.qualityScore}/100 — ${qualityAnalysis.summary || ""}</p>
+          <ul>
+            ${qualityAnalysis.warnings.map(w => `<li><strong>${w.type}</strong> (${w.severity}): ${w.message} — ${w.suggestion || ""}</li>`).join("")}
+          </ul>
+        ` : ""}
+
         ${includeTraceability ? `
           <h2>Requirement Traceability Matrix</h2>
           <table class="trace-table">
@@ -1327,7 +1355,7 @@ export default function App() {
   return (
     <div className="app">
       {/* ── Navbar ── */}
-      <nav className="navbar">
+      <nav className="navbar" aria-label="Application controls">
         <div className="navbar-brand">
           {sessions.length > 0 && (
             <button
@@ -1335,7 +1363,7 @@ export default function App() {
               onClick={() => setSidebarOpen(o => !o)}
               aria-label="Toggle session sidebar"
             >
-              <span className="sidebar-toggle-icon">{sidebarOpen ? "←" : "☰"}</span>
+              <span className="sidebar-toggle-icon">{sidebarOpen ? "Hide list" : "Sessions"}</span>
             </button>
           )}
           <span className="navbar-title">TestGPT</span>
@@ -1347,7 +1375,7 @@ export default function App() {
           {result && (
             <>
               <button className="btn btn-ghost" onClick={handleCopy}>
-                {copied ? "✓ Copied" : "Copy all"}
+                {copied ? "Copied" : "Copy Gherkin"}
               </button>
               <button className="btn btn-outline" onClick={handleExport}>
                 Export
@@ -1358,6 +1386,7 @@ export default function App() {
             className="btn-theme"
             onClick={() => setTheme(t => t === "dark" ? "light" : "dark")}
             aria-label="Toggle theme"
+            aria-pressed={theme === "dark"}
           >
             {theme === "dark" ? "Light" : "Dark"}
           </button>
@@ -1383,7 +1412,8 @@ export default function App() {
                 onClick={() => loadSession(s)}
                 role="button"
                 tabIndex={0}
-                onKeyDown={e => e.key === "Enter" && loadSession(s)}
+                aria-current={s.id === activeId ? "true" : undefined}
+                onKeyDown={e => (e.key === "Enter" || e.key === " ") && loadSession(s)}
               >
                 <span className="sidebar-item-title">REQ-{sessions.length - sIdx}: {s.title}</span>
                 <button
@@ -1392,7 +1422,7 @@ export default function App() {
                   aria-label="Delete session"
                   tabIndex={-1}
                 >
-                  ✕
+                  Delete
                 </button>
               </li>
             ))}
@@ -1407,56 +1437,266 @@ export default function App() {
             <div className="panel-header">
               <div className="panel-header-title-row">
                 <h2>Requirements</h2>
-                {isEdited && <span className="badge-draft">Edited</span>}
               </div>
-              <p className="panel-subtitle">Paste your software requirements below</p>
+              <p className="panel-subtitle" id="requirements-help">Paste requirements, user stories, use cases, or acceptance criteria.</p>
             </div>
-            <textarea
-              id="requirements-input"
-              className="requirements-textarea"
-              value={requirements}
-              onChange={e => setRequirements(e.target.value)}
-              onKeyDown={e => {
-                if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && requirements.trim() && !loading) {
-                  e.preventDefault()
-                  handleGenerate()
-                }
-              }}
-              placeholder={"1. Users must be able to register with email and password.\n2. After registration, a confirmation email should be sent.\n3. Users must be able to log in with their credentials."}
-              aria-label="Software requirements input"
-            />
-            <div className="input-footer">
-              <div className="input-footer-left">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".txt,.md,.docx"
-                  onChange={handleFileUpload}
-                  style={{ display: "none" }}
-                  aria-label="Upload requirements file"
-                />
+            <div className="panel-input-body">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.md,.docx"
+                onChange={handleFileUpload}
+                style={{ display: "none" }}
+                aria-label="Upload requirements file"
+              />
+              <div className="input-action-bar" aria-label="Requirement actions">
+                <div className="input-action-secondary">
+                  <button
+                    className="btn-upload"
+                    onClick={() => fileInputRef.current?.click()}
+                    type="button"
+                  >
+                    Upload File
+                  </button>
+                  <button type="button" className="btn-upload" onClick={loadDemoRequirements}>
+                    Load Demo
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-upload btn-upload-analyze"
+                    onClick={handleAnalyze}
+                    disabled={analyzeLoading || !requirements.trim()}
+                  >
+                    {analyzeLoading ? "Analyzing…" : "Analyze"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-upload btn-clear-input"
+                    onClick={handleClearInput}
+                    disabled={!requirements.trim()}
+                  >
+                    Clear
+                  </button>
+                </div>
                 <button
-                  className="btn-upload"
-                  onClick={() => fileInputRef.current?.click()}
-                  type="button"
+                  id="generate-btn"
+                  className="btn btn-primary input-footer-generate"
+                  onClick={handleGenerate}
+                  disabled={loading || !requirements.trim()}
+                  aria-label="Generate scenarios"
                 >
-                  Upload File
+                  {loading
+                    ? <span className="btn-loading"><span className="spinner" /> Generating…</span>
+                    : "Generate Scenarios"
+                  }
                 </button>
+              </div>
+
+              <label className="field-label" htmlFor="requirements-input">
+                Requirement text
+              </label>
+              <textarea
+                id="requirements-input"
+                className="requirements-textarea"
+                value={requirements}
+                onChange={e => setRequirements(e.target.value)}
+                onKeyDown={e => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && requirements.trim() && !loading) {
+                    e.preventDefault()
+                    handleGenerate()
+                  }
+                }}
+                placeholder={"1. Users must be able to register with email and password.\n2. After registration, a confirmation email should be sent.\n3. Users must be able to log in with their credentials."}
+                aria-label="Software requirements input"
+                aria-describedby="requirements-help"
+              />
+
+            {qualityAnalysis && (() => {
+              const scoreClass = qualityAnalysis.qualityScore >= 70 ? "good" : qualityAnalysis.qualityScore >= 40 ? "mid" : "low"
+              const activeWarnings = (qualityAnalysis.warnings || []).filter(w => !dismissedWarningIds.includes(w.id))
+              const totalWarnings = (qualityAnalysis.warnings || []).length
+              const selectedCount = activeWarnings.filter(w => selectedWarningIds.includes(w.id)).length
+              const majorWarnings = activeWarnings.filter(isMajorWarning)
+              const otherWarnings = activeWarnings.filter(w => !isMajorWarning(w))
+
+              const renderWarningItem = (w) => {
+                const isSelected = selectedWarningIds.includes(w.id)
+                return (
+                  <li
+                    key={w.id}
+                    className={`quality-warning quality-severity-${w.severity} ${isMajorWarning(w) ? "quality-warning-major" : ""} ${isSelected ? "quality-warning-selected" : ""}`}
+                  >
+                    <label className="quality-warning-select-row">
+                      <input
+                        type="checkbox"
+                        className="quality-warning-checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleWarningSelection(w.id)}
+                        aria-label={`Apply suggestion for ${warningTypeLabel(w.type)}`}
+                      />
+                      <span className="quality-apply-label">Apply this suggestion</span>
+                    </label>
+                    <div className="quality-warning-top">
+                      <span className={`quality-type-pill quality-type-${w.type}`}>
+                        {warningTypeLabel(w.type)}
+                      </span>
+                      <span className={`quality-severity-pill severity-${w.severity}`}>
+                        {w.severity}
+                      </span>
+                      {w.requirementRef && (
+                        <span className="quality-warning-ref">{w.requirementRef}</span>
+                      )}
+                    </div>
+                    <p className="quality-warning-msg">{w.message}</p>
+                    {w.suggestion && (
+                      <p className="quality-warning-suggestion">
+                        <strong>Suggestion:</strong> {w.suggestion}
+                      </p>
+                    )}
+                    <div className="quality-warning-actions">
+                      <button
+                        type="button"
+                        className="btn-quality-action btn-quality-ack"
+                        onClick={() => acknowledgeWarning(w.id)}
+                      >
+                        Acknowledge
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-quality-action btn-quality-dismiss"
+                        onClick={() => dismissWarning(w.id)}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </li>
+                )
+              }
+
+              return (
+                <section
+                  className={`quality-panel ${qualityPanelOpen ? "is-open" : "is-collapsed"}`}
+                  aria-label="Requirement issues"
+                >
+                  <button
+                    type="button"
+                    className="quality-panel-toggle"
+                    onClick={() => setQualityPanelOpen(open => !open)}
+                    aria-expanded={qualityPanelOpen}
+                  >
+                    <span className="quality-panel-toggle-main">
+                      <span className={`quality-chevron ${qualityPanelOpen ? "is-open" : ""}`} aria-hidden="true" />
+                      <span className="quality-panel-title">Requirement Issues</span>
+                      {majorWarnings.length > 0 && (
+                        <span className="quality-major-count">{majorWarnings.length} review first</span>
+                      )}
+                      {activeWarnings.length > 0 ? (
+                        <span className="quality-count-badge">{activeWarnings.length} active</span>
+                      ) : totalWarnings > 0 ? (
+                        <span className="quality-count-badge quality-count-resolved">All reviewed</span>
+                      ) : (
+                        <span className="quality-count-badge quality-count-clear">No issues</span>
+                      )}
+                    </span>
+                    <span className={`quality-score quality-score-${scoreClass}`}>
+                      {qualityAnalysis.qualityScore}/100
+                    </span>
+                  </button>
+
+                  {qualityPanelOpen && (
+                    <div className="quality-panel-body">
+                      {activeWarnings.length > 0 && (
+                        <div className="quality-panel-actions">
+                          <div className="quality-select-toolbar">
+                            <span className="quality-select-label">
+                              {selectedCount} of {activeWarnings.length} selected for apply
+                            </span>
+                            <button
+                              type="button"
+                              className="btn-quality-link"
+                              onClick={() => setSelectedWarningIds(activeWarnings.map(w => w.id))}
+                            >
+                              Select all
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-quality-link"
+                              onClick={() => setSelectedWarningIds([])}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn-improve-requirements"
+                            onClick={handleImproveFromWarnings}
+                            disabled={improveLoading || analyzeLoading || !requirements.trim() || selectedCount === 0}
+                          >
+                            {improveLoading
+                              ? "Updating requirements…"
+                              : `Apply selected (${selectedCount}) and update requirements`}
+                          </button>
+                          <p className="quality-improve-hint">
+                            Select the issues to fix, then apply. Unselected issues remain in the list.
+                          </p>
+                        </div>
+                      )}
+
+                      {qualityAnalysis.summary && (
+                        <p className="quality-summary">{qualityAnalysis.summary}</p>
+                      )}
+
+                      {acknowledgedWarningIds.length > 0 && (
+                        <p className="quality-ack-note">
+                          {acknowledgedWarningIds.length} warning(s) acknowledged
+                        </p>
+                      )}
+
+                      {activeWarnings.length === 0 ? (
+                        <div className="quality-empty">
+                          {totalWarnings === 0
+                            ? "No quality issues detected for these requirements."
+                            : "All warnings were dismissed or acknowledged."}
+                        </div>
+                      ) : (
+                        <>
+                          {majorWarnings.length > 0 && (
+                            <div className="quality-issues-section">
+                              <h4 className="quality-issues-heading">Review first</h4>
+                              <p className="quality-issues-desc">
+                                Issue types that can block reliable test design. The severity pill still shows low, medium, or high impact.
+                              </p>
+                              <ul className="quality-warnings-list">
+                                {majorWarnings.map(renderWarningItem)}
+                              </ul>
+                            </div>
+                          )}
+                          {otherWarnings.length > 0 && (
+                            <div className="quality-issues-section">
+                              <h4 className="quality-issues-heading">Other issues</h4>
+                              <ul className="quality-warnings-list">
+                                {otherWarnings.map(renderWarningItem)}
+                              </ul>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </section>
+              )
+            })()}
+            </div>
+
+            <div className="input-footer">
+              <div className="input-footer-meta">
+                <label className="streaming-toggle">
+                  <input type="checkbox" checked={useStreaming} onChange={e => setUseStreaming(e.target.checked)} />
+                  Stream output while generating
+                </label>
                 <span className="upload-tip">.txt, .md, .docx</span>
                 <span className="char-count">{requirements.length} chars</span>
               </div>
-              <button
-                id="generate-btn"
-                className="btn btn-primary"
-                onClick={handleGenerate}
-                disabled={loading || !requirements.trim()}
-                aria-label="Generate Gherkin tests"
-              >
-                {loading
-                  ? <span className="btn-loading"><span className="spinner" /> Generating…</span>
-                  : "Generate Tests →"
-                }
-              </button>
             </div>
           </div>
 
@@ -1464,82 +1704,244 @@ export default function App() {
           <div className="panel panel-output">
             <div className="panel-header">
               <div className="panel-header-title-row">
-                <h2>Generated Tests</h2>
+                <h2>
+                  {rightPanelView === "coverage"
+                    ? "Coverage Summary"
+                    : rightPanelView === "matrix"
+                      ? "Traceability Matrix"
+                      : "Generated Scenarios"}
+                </h2>
                 {result && (
-                  <div className="output-header-actions">
-                    {activeSession && activeSession.versions && activeSession.versions.length > 1 && (
-                      <div className="version-switcher">
+                  <div className="panel-header-tools">
+                    <div className="view-toggle-row">
+                      <button
+                        type="button"
+                        className={`btn-view-tab ${rightPanelView === "scenarios" ? "active" : ""}`}
+                        onClick={() => setRightPanelView("scenarios")}
+                        aria-pressed={rightPanelView === "scenarios"}
+                      >
+                        Scenarios
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn-view-tab ${rightPanelView === "coverage" ? "active" : ""}`}
+                        onClick={() => setRightPanelView("coverage")}
+                        aria-pressed={rightPanelView === "coverage"}
+                      >
+                        Coverage
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn-view-tab ${rightPanelView === "matrix" ? "active" : ""}`}
+                        onClick={() => setRightPanelView("matrix")}
+                        aria-pressed={rightPanelView === "matrix"}
+                      >
+                        Matrix
+                      </button>
+                    </div>
+                    {rightPanelView === "scenarios" && (
+                      <div className="output-header-actions">
+                        {activeSession && activeSession.versions && activeSession.versions.length > 1 && (
+                          <div className="version-switcher">
+                            <button
+                              className="btn-version"
+                              disabled={activeVersionIdx === 0}
+                              onClick={() => handleVersionChange(activeVersionIdx - 1)}
+                              aria-label="Previous version"
+                            >
+                              Prev
+                            </button>
+                            <span className="version-text">
+                              Version {activeVersionIdx + 1}/{totalVersions}
+                            </span>
+                            <button
+                              className="btn-version"
+                              disabled={activeVersionIdx === totalVersions - 1}
+                              onClick={() => handleVersionChange(activeVersionIdx + 1)}
+                              aria-label="Next version"
+                            >
+                              Next
+                            </button>
+                            <button
+                              type="button"
+                              className={`btn-diff-toggle ${diffViewOpen ? "active" : ""}`}
+                              onClick={() => setDiffViewOpen(o => !o)}
+                              title="Compare with the first generated version"
+                            >
+                              {diffViewOpen ? "Hide diff" : "Diff"}
+                            </button>
+                          </div>
+                        )}
                         <button
-                          className="btn-version"
-                          disabled={activeVersionIdx === 0}
-                          onClick={() => handleVersionChange(activeVersionIdx - 1)}
-                          aria-label="Previous version"
+                          className="btn-regenerate-badge"
+                          onClick={handleGenerate}
+                          disabled={loading}
+                          title="Regenerate all scenarios for this requirement"
                         >
-                          ←
-                        </button>
-                        <span className="version-text">
-                          {activeVersionIdx + 1} / {totalVersions}
-                        </span>
-                        <button
-                          className="btn-version"
-                          disabled={activeVersionIdx === totalVersions - 1}
-                          onClick={() => handleVersionChange(activeVersionIdx + 1)}
-                          aria-label="Next version"
-                        >
-                          →
-                        </button>
-                        <button 
-                          className={`btn-diff-toggle ${diffViewOpen ? "active" : ""}`}
-                          onClick={() => setDiffViewOpen(o => !o)}
-                          title="Toggle visual diff with original version"
-                        >
-                          {diffViewOpen ? "📝 Hide Diff" : "✨ Diff View"}
+                          Regenerate
                         </button>
                       </div>
                     )}
-                    <button
-                      className="btn-regenerate-badge"
-                      onClick={handleGenerate}
-                      disabled={loading}
-                      title="Regenerate all scenarios for this requirement"
-                    >
-                      🔄 Regenerate
-                    </button>
                   </div>
                 )}
               </div>
-              <p className="panel-subtitle">Gherkin acceptance test scenarios</p>
+              {(requirements.trim() || previousRequirements) && (
+                <div className="panel-header-actions-row">
+                  {requirements.trim() && (
+                    <button type="button" className="btn btn-ghost btn-sm change-impact-btn" onClick={() => {
+                      setPreviousRequirements(requirements)
+                      addToast("Snapshot saved. Edit requirements, then run Change Impact.", "info")
+                    }}>
+                      Snapshot for Change Impact
+                    </button>
+                  )}
+                  {previousRequirements && (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={runChangeImpact}>
+                      Run Change Impact
+                    </button>
+                  )}
+                </div>
+              )}
+              <p className="panel-subtitle">
+                {rightPanelView === "coverage"
+                  ? "Per-requirement scenario coverage by flow type"
+                  : rightPanelView === "matrix"
+                    ? "Requirement-to-scenario traceability"
+                    : "Gherkin acceptance test scenarios"}
+              </p>
             </div>
             <div className="output-content">
               {loading && <Skeleton />}
+              <div className="sr-only" role="status" aria-live="polite">
+                {loading ? "Generating scenarios" : error ? `Error: ${error}` : result ? "Scenarios ready" : "No scenarios generated"}
+              </div>
 
               {error && !loading && (
                 <div className="error-state">
                   <p className="error-message">{error}</p>
-                  <button className="btn btn-outline" onClick={handleGenerate}>Try again</button>
+                  <button type="button" className="btn btn-outline" onClick={handleGenerate}>Try again</button>
                 </div>
               )}
 
               {!loading && !error && !result && (
                 <div className="empty-state">
-                  <h3>No tests yet</h3>
-                  <p>Enter your requirements on the left and click <strong>Generate Tests</strong></p>
+                  <h3>No scenarios generated yet</h3>
+                  <p>Enter a requirement and select <strong>Generate Scenarios</strong> to begin.</p>
                 </div>
               )}
 
-              {result && !loading && (
+              {result && !loading && rightPanelView === "coverage" && (
+                <div className="coverage-summary-container">
+                  <p className="coverage-summary-legend">
+                    Status per flow type: Complete (has scenario), Partial (other scenarios exist), Not covered (none).
+                    Overall uses all four flow types for the requirement.
+                  </p>
+                  <div className="coverage-summary-scroll">
+                    <table className="coverage-summary-table">
+                      <thead>
+                        <tr>
+                          <th>Requirement</th>
+                          <th>Overall</th>
+                          {COVERAGE_FLOW_TYPES.map((f) => (
+                            <th key={f.id}>{f.short}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {buildCoverageSummary(requirements, result).map((row) => (
+                          <tr key={row.requirement.id}>
+                            <td className="coverage-req-cell">
+                              <button
+                                type="button"
+                                className="trace-req-link"
+                                onClick={() => handleTraceClick(row.requirement.id)}
+                              >
+                                {row.requirement.id}
+                              </button>
+                              <span className="trace-req-text">
+                                {row.requirement.text?.slice(0, 60)}
+                                {(row.requirement.text?.length || 0) > 60 ? "…" : ""}
+                              </span>
+                            </td>
+                            <td>
+                              <span className={`cov-status cov-status-${row.overall}`}>
+                                {coverageStatusLabel(row.overall)}
+                              </span>
+                            </td>
+                            {COVERAGE_FLOW_TYPES.map((f) => (
+                              <td key={f.id}>
+                                <span className={`cov-status cov-status-${row.byType[f.id]}`}>
+                                  {coverageStatusLabel(row.byType[f.id])}
+                                </span>
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {result && !loading && rightPanelView === "matrix" && (
+                <div className="trace-matrix-container">
+                  <table className="trace-matrix-table">
+                    <thead>
+                      <tr>
+                        <th>Requirement</th>
+                        <th>Scenarios</th>
+                        <th>Coverage</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {buildCoverageMatrix(requirements, result).map(row => (
+                        <tr key={row.requirement.id} className={row.covered ? "trace-row-covered" : "trace-row-uncovered"}>
+                          <td>
+                            <button
+                              type="button"
+                              className="trace-req-link"
+                              onClick={() => handleTraceClick(row.requirement.id)}
+                            >
+                              {row.requirement.id}
+                            </button>
+                            <span className="trace-req-text">{row.requirement.text?.slice(0, 80)}{(row.requirement.text?.length || 0) > 80 ? "…" : ""}</span>
+                          </td>
+                          <td>
+                            {row.scenarios.length === 0 ? (
+                              <em className="trace-none">No scenarios</em>
+                            ) : (
+                              <ul className="trace-scenario-list">
+                                {row.scenarios.map(sc => (
+                                  <li key={sc.id}>{sc.title}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </td>
+                          <td>
+                            <span className={`coverage-badge ${row.covered ? "coverage-covered" : "coverage-uncovered"}`}>
+                              {row.covered ? "Covered" : "Uncovered"}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {result && !loading && rightPanelView === "scenarios" && (
                 !isValidGherkin(result) && !forceShowRaw ? (
                   <div className="malformed-warning">
-                    <div className="malformed-warning-title">Malformed AI Response Detected</div>
+                    <div className="malformed-warning-title">Malformed response detected</div>
                     <p className="malformed-warning-text">
-                      The generated output does not conform to standard Gherkin syntax. The AI model may have returned conversational text or hit an internal error.
+                      The output does not conform to standard Gherkin syntax. It may contain plain text or an incomplete response. Regenerate scenarios or review the raw output.
                     </p>
                     <div className="malformed-warning-actions">
-                      <button className="btn btn-primary" onClick={handleGenerate}>
-                        Regenerate Tests
+                      <button type="button" className="btn btn-primary" onClick={handleGenerate}>
+                        Regenerate scenarios
                       </button>
-                      <button className="btn btn-outline" onClick={() => setForceShowRaw(true)}>
-                        Show Raw Response Anyway
+                      <button type="button" className="btn btn-outline" onClick={() => setForceShowRaw(true)}>
+                        Show raw output
                       </button>
                     </div>
                   </div>
@@ -1635,7 +2037,7 @@ export default function App() {
                         return (
                           <div className="scenarios-container diff-container">
                             <div className="diff-view-heading">
-                              🔍 Comparing Original (Version 1) with Current (Version {activeVersionIdx + 1})
+                              Comparing version 1 with version {activeVersionIdx + 1}
                             </div>
                             <div className="diff-lines-list">
                               <pre className="diff-pre">
@@ -1660,6 +2062,7 @@ export default function App() {
                             {[
                               { id: "all", label: `All (${scenarios.length})` },
                               { id: "happy-path", label: `Happy Path (${countType("happy-path")})` },
+                              { id: "alternative-flow", label: `Alternative (${countType("alternative-flow")})` },
                               { id: "edge-case", label: `Edge Cases (${countType("edge-case")})` },
                               { id: "negative", label: `Negative (${countType("negative")})` }
                             ].map(tab => (
@@ -1667,10 +2070,69 @@ export default function App() {
                                 key={tab.id}
                                 className={`filter-tab-btn filter-tab-${tab.id} ${selectedCategory === tab.id ? "active" : ""}`}
                                 onClick={() => setSelectedCategory(tab.id)}
+                                aria-pressed={selectedCategory === tab.id}
                               >
                                 {tab.label}
                               </button>
                             ))}
+                          </div>
+
+                          {/* Phase 5.2 & 5.3 Conversational Refinement Chat Interface */}
+                          <div className="refinement-chat-container">
+                            <div className="refinement-chat-header">
+                              <label className="field-label" htmlFor="refinement-chat-input">
+                                Scenario refinement
+                              </label>
+                              <button className="btn btn-outline btn-add-scenario btn-add-scenario-inline" onClick={handleAddScenario}>
+                                + Add Custom Scenario
+                              </button>
+                            </div>
+                            <p className="refinement-chat-sub" id="refinement-chat-desc">
+                              Request changes to specific scenarios using @1, @2, or scenario titles.
+                            </p>
+                            
+                            {showSuggestions && suggestions.length > 0 && (
+                              <div className="chat-autocomplete-dropdown" role="listbox" aria-label="Scenario suggestions">
+                                {suggestions.map((s, idx) => (
+                                  <div
+                                    key={s.index}
+                                    role="option"
+                                    aria-selected={idx === suggestionIdx}
+                                    className={`chat-autocomplete-item ${idx === suggestionIdx ? "active" : ""}`}
+                                    onClick={() => selectSuggestion(s.index)}
+                                  >
+                                    <span className="autocomplete-badge">@{s.index}</span>
+                                    <span className="autocomplete-title">{s.title}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="refinement-chat-input-row">
+                              <textarea
+                                id="refinement-chat-input"
+                                className="refinement-chat-textarea"
+                                value={refinementPrompt}
+                                onChange={handleTextareaChange}
+                                onKeyDown={handleTextareaKeyDown}
+                                onBlur={() => {
+                                  // Delay closing dropdown slightly so click events on items can fire
+                                  setTimeout(() => setShowSuggestions(false), 250);
+                                }}
+                                placeholder="e.g. Make @1 cover duplicate emails, or add a Given step for user roles on scenario 3"
+                                rows={2}
+                                disabled={refineLoading}
+                                aria-describedby="refinement-chat-desc"
+                              />
+                              <button 
+                                type="button"
+                                className="btn btn-primary btn-refine-send" 
+                                onClick={() => handleRefine()}
+                                disabled={refineLoading || !refinementPrompt.trim()}
+                              >
+                                {refineLoading ? "Refining…" : "Send"}
+                              </button>
+                            </div>
                           </div>
 
                           {/* Scenarios List */}
@@ -1703,57 +2165,6 @@ export default function App() {
                             )}
                           </div>
 
-                          {/* Add Custom Scenario Button */}
-                          <div className="scenarios-footer-actions">
-                            <button className="btn btn-outline btn-add-scenario" onClick={handleAddScenario}>
-                              + Add Custom Scenario
-                            </button>
-                          </div>
-
-                          {/* Phase 5.2 & 5.3 Conversational Refinement Chat Interface */}
-                          <div className="refinement-chat-container" style={{ position: "relative" }}>
-                            <h4 className="refinement-chat-heading">🤖 Iterative Refinement Chat</h4>
-                            <p className="refinement-chat-sub">Refine and adapt these Gherkin scenarios interactively using conversational AI prompts.</p>
-                            
-                            {showSuggestions && suggestions.length > 0 && (
-                              <div className="chat-autocomplete-dropdown">
-                                {suggestions.map((s, idx) => (
-                                  <div
-                                    key={s.index}
-                                    className={`chat-autocomplete-item ${idx === suggestionIdx ? "active" : ""}`}
-                                    onClick={() => selectSuggestion(s.index)}
-                                  >
-                                    <span className="autocomplete-badge">@{s.index}</span>
-                                    <span className="autocomplete-title">{s.title}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            <div className="refinement-chat-input-row">
-                              <textarea
-                                id="refinement-chat-input"
-                                className="refinement-chat-textarea"
-                                value={refinementPrompt}
-                                onChange={handleTextareaChange}
-                                onKeyDown={handleTextareaKeyDown}
-                                onBlur={() => {
-                                  // Delay closing dropdown slightly so click events on items can fire
-                                  setTimeout(() => setShowSuggestions(false), 250);
-                                }}
-                                placeholder="Ask AI to refine scenarios (e.g., 'Make @1 cover duplicate emails too' or 'For #3, add a Given step for user roles')..."
-                                rows={2}
-                                disabled={refineLoading}
-                              />
-                              <button 
-                                className="btn btn-primary btn-refine-send" 
-                                onClick={() => handleRefine()}
-                                disabled={refineLoading || !refinementPrompt.trim()}
-                              >
-                                {refineLoading ? "Refining..." : "Send Request 🚀"}
-                              </button>
-                            </div>
-                          </div>
                         </div>
                       );
                     })()
@@ -1769,10 +2180,10 @@ export default function App() {
       {/* ── Export Settings Modal (Phase 8) ── */}
       {exportOpen && (
         <div className="modal-overlay" onClick={() => setExportOpen(false)}>
-          <div className="modal-card" onClick={e => e.stopPropagation()}>
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="export-dialog-title" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Export Options</h3>
-              <button className="modal-close-btn" onClick={() => setExportOpen(false)}>✕</button>
+              <h3 id="export-dialog-title">Export Options</h3>
+              <button type="button" className="modal-close-btn" onClick={() => setExportOpen(false)} aria-label="Close export dialog">Close</button>
             </div>
             
             <div className="modal-body">
@@ -1783,6 +2194,7 @@ export default function App() {
                   <button 
                     className={`radio-btn ${exportFormat === "feature" ? "radio-btn-active" : ""}`}
                     onClick={() => setExportFormat("feature")}
+                    aria-pressed={exportFormat === "feature"}
                   >
                     <span className="radio-title">.feature</span>
                     <span className="radio-desc">BDD Gherkin File</span>
@@ -1790,6 +2202,7 @@ export default function App() {
                   <button 
                     className={`radio-btn ${exportFormat === "pdf" ? "radio-btn-active" : ""}`}
                     onClick={() => setExportFormat("pdf")}
+                    aria-pressed={exportFormat === "pdf"}
                   >
                     <span className="radio-title">.pdf</span>
                     <span className="radio-desc">Print PDF Document</span>
@@ -1797,6 +2210,7 @@ export default function App() {
                   <button 
                     className={`radio-btn ${exportFormat === "docx" ? "radio-btn-active" : ""}`}
                     onClick={() => setExportFormat("docx")}
+                    aria-pressed={exportFormat === "docx"}
                   >
                     <span className="radio-title">.doc</span>
                     <span className="radio-desc">Word Document</span>
@@ -1851,6 +2265,16 @@ export default function App() {
                     />
                     <span className="checkbox-text">Generate Traceability Matrix (Requirements mapping table)</span>
                   </label>
+                  {qualityAnalysis?.warnings?.length > 0 && (
+                    <label className="checkbox-container">
+                      <input
+                        type="checkbox"
+                        checked={includeAmbiguityWarnings}
+                        onChange={e => setIncludeAmbiguityWarnings(e.target.checked)}
+                      />
+                      <span className="checkbox-text">Include quality / ambiguity warnings in export</span>
+                    </label>
+                  )}
                 </div>
               </div>
             </div>
@@ -1867,8 +2291,41 @@ export default function App() {
         </div>
       )}
 
+      {changeImpactOpen && changeImpactResult && (
+        <div className="modal-overlay" onClick={() => setChangeImpactOpen(false)}>
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="change-impact-title" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 id="change-impact-title">Change Impact Analysis</h3>
+              <button type="button" className="modal-close-btn" onClick={() => setChangeImpactOpen(false)} aria-label="Close change impact dialog">Close</button>
+            </div>
+            <div className="modal-body">
+              <p>{changeImpactResult.summary}</p>
+              {changeImpactResult.impactedAreas?.length > 0 && (
+                <>
+                  <h4>Impacted areas</h4>
+                  <ul>{changeImpactResult.impactedAreas.map((a, i) => <li key={i}>{a}</li>)}</ul>
+                </>
+              )}
+              {changeImpactResult.recommendedActions?.length > 0 && (
+                <>
+                  <h4>Recommended actions</h4>
+                  <ul>
+                    {changeImpactResult.recommendedActions.map((a, i) => (
+                      <li key={i}><strong>{a.action}</strong>: {a.detail}</li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-primary" onClick={() => setChangeImpactOpen(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Toasts ── */}
-      <div className="toast-container">
+      <div className="toast-container" aria-live="polite" aria-relevant="additions">
         {toasts.map(t => (
           <Toast key={t.id} message={t.message} type={t.type} onClose={() => removeToast(t.id)} />
         ))}

@@ -3,3 +3,5 @@ uvicorn
 pydantic
 groq
 python-dotenv
+httpx
+pytest

@@ -24,6 +24,7 @@
 
   --shadow-sm: 0 1px 3px rgba(180,80,60,0.08), 0 1px 2px rgba(180,80,60,0.04);
   --shadow-md: 0 4px 16px rgba(180,80,60,0.1), 0 2px 4px rgba(180,80,60,0.05);
+  --shadow-lg: 0 20px 44px rgba(180,80,60,0.16);
 
   --kw-feature:  #7C3AED;
   --kw-scenario: #9D174D;
@@ -58,10 +59,10 @@
   --border-input: #3F3F46;
   --border-focus: #FCD34D;
 
-  --accent:       #F59E0B;
-  --accent-dark:  #D97706;
-  --accent-light: rgba(245,158,11,0.15);
-  --accent-text:  #1C1400;
+  --accent:       #2DD4BF;
+  --accent-dark:  #5EEAD4;
+  --accent-light: rgba(45,212,191,0.14);
+  --accent-text:  #06201D;
 
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
   --shadow-md: 0 4px 16px rgba(0,0,0,0.4);
@@ -77,11 +78,55 @@
   --navbar-bg: rgba(24,24,27,0.92);
 }
 
+html {
+  height: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
-  min-height: 100vh;
+  min-height: 100%;
+  min-height: 100dvh;
   background: var(--bg-base);
   color: var(--text-primary);
   transition: background-color 0.2s ease, color 0.2s ease;
+  overflow-x: hidden;
 }
 
-#root { min-height: 100vh; display: flex; flex-direction: column; }
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+:focus-visible {
+  outline: 3px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent-light);
+}
+
+#root {
+  min-height: 100%;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
