@@ -1,35 +1,18 @@
-# Virtual environments
-backend/venv/
-backend/.venv/
-venv/
-.venv/
-env/
-ENV/
-
-# Environment variables
+# Environment & secrets
 backend/.env
 .env
-.env.local
-.env.*.local
+.env.*
 
-# Python caches and compiled files
-**/__pycache__/
-**/*.pyc
-**/*.pyo
-**/*.pyd
+# Python
+backend/venv/
+__pycache__/
+*.py[cod]
 .pytest_cache/
-.ipynb_checkpoints/
 
-# Node modules (dependencies)
+# Node
 frontend/node_modules/
-node_modules/
-
-# Frontend production builds
 frontend/dist/
-dist/
 
-# IDE files and OS metadata
-.vscode/
-.idea/
+# OS / IDE
 .DS_Store
-Thumbs.db
+*.log

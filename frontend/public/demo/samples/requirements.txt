@@ -1,0 +1,7 @@
+1. Customers must add products to a shopping cart from the product detail page; the cart must show item name, unit price, quantity, and line subtotal.
+2. Customers may update item quantity in the cart (minimum 1, maximum 99 per product); invalid quantities must be rejected with a clear error message.
+3. The cart total must equal the sum of all line subtotals; tax is calculated at 18% and displayed separately before checkout.
+4. Customers must apply a single discount coupon per order; expired or invalid coupons must be rejected without changing cart totals.
+5. At checkout, customers must provide shipping address and payment method; orders with missing required fields must not be submitted.
+6. After successful payment, the system must send an order confirmation email within 2 minutes containing order ID and estimated delivery date.
+7. Customers may remove items from the cart; removing the last item leaves an empty cart with a message prompting the user to continue shopping.

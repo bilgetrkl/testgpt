@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node src/phase5.test.js",
+    "test": "node --test src/*.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

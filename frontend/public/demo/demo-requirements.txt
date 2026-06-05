@@ -1,0 +1,5 @@
+1. Users must register with a valid email address and a password of at least 8 characters.
+2. After successful registration, the system shall send a confirmation email within 5 minutes.
+3. Users must log in with email and password; failed attempts after 5 tries lock the account for 15 minutes.
+4. Logged-in users can update their profile name and password; password change requires the current password.
+5. Administrators can deactivate user accounts; deactivated users cannot log in and see an appropriate message.
