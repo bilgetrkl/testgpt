@@ -1061,7 +1061,10 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ requirements: sanitized, inputType }),
         })
-        if (!res.ok) throw new Error(`Server error ${res.status}`)
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}))
+          throw new Error(errorData.detail || `Server error ${res.status}`)
+        }
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ""
@@ -1305,7 +1308,7 @@ export default function App() {
         <section className="auth-intro">
           <span className="auth-kicker">AI acceptance testing workspace</span>
           <h1>TestGPT</h1>
-          <p>Turn software requirements into traceable Gherkin scenarios, refine them with AI, and keep every session in your account.</p>
+          <p>Turn software requirements into traceable Gherkin scenarios, refine them with AI.</p>
           <div className="auth-points" aria-label="Product highlights">
             <span>Requirement traceability</span>
             <span>Version history</span>
@@ -1796,10 +1799,6 @@ export default function App() {
 
             <div className="input-footer">
               <div className="input-footer-meta">
-                <label className="streaming-toggle">
-                  <input type="checkbox" checked={useStreaming} onChange={e => setUseStreaming(e.target.checked)} />
-                  Stream output while generating
-                </label>
                 <span className="upload-tip">.txt, .md, .docx</span>
                 <span className="char-count">{requirements.length} chars</span>
               </div>

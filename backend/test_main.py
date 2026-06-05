@@ -95,3 +95,30 @@ def test_generate_accepts_input_type(auth_headers):
         json={"requirements": "short", "inputType": "use_case"},
     )
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "nonsense",
+    [
+        "asdf qwer zxcv hjkl",
+        "aaaaaaaaaaaaaaaaaaaa",
+        "Today is a very beautiful and pleasant day outside",
+    ],
+)
+def test_generate_rejects_nonsense_requirements(auth_headers, nonsense):
+    r = client.post(
+        "/generate",
+        headers=auth_headers,
+        json={"requirements": nonsense},
+    )
+    assert r.status_code == 400
+    assert "requirement" in r.json()["detail"].lower() or "random" in r.json()["detail"].lower() or "meaningless" in r.json()["detail"].lower()
+
+
+def test_stream_generate_rejects_nonsense_requirements(auth_headers):
+    r = client.post(
+        "/generate/stream",
+        headers=auth_headers,
+        json={"requirements": "random ordinary sentence without useful context"},
+    )
+    assert r.status_code == 400

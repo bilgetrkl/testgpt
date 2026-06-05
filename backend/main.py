@@ -23,6 +23,7 @@ from ai_utils import (
     input_type_guidance,
     normalize_input_type,
     parse_json_response,
+    validate_testable_requirements,
     validate_requirements,
 )
 from database import (
@@ -374,7 +375,7 @@ def coverage_review(data: CoverageReviewInput, request: Request, user: dict[str,
 def generate_tests(data: RequirementsInput, request: Request, user: dict[str, Any] = Depends(get_current_user)):
     _check_rate_limit(f"user:{user['id']}")
     try:
-        text = validate_requirements(data.requirements)
+        text = validate_testable_requirements(data.requirements)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -400,7 +401,7 @@ def generate_tests(data: RequirementsInput, request: Request, user: dict[str, An
 def generate_tests_stream(data: RequirementsInput, request: Request, user: dict[str, Any] = Depends(get_current_user)):
     _check_rate_limit(f"user:{user['id']}")
     try:
-        text = validate_requirements(data.requirements)
+        text = validate_testable_requirements(data.requirements)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

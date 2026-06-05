@@ -20,6 +20,16 @@ MODEL = "llama-3.3-70b-versatile"
 MAX_REQUIREMENTS_LEN = 50_000
 MIN_REQUIREMENTS_LEN = 10
 
+REQUIREMENT_SIGNAL_PATTERN = re.compile(
+    r"\b(?:must|should|shall|can|cannot|allow|allows|allowed|require|requires|required|"
+    r"support|supports|validate|validates|display|displays|show|shows|prevent|prevents|"
+    r"maximum|minimum|only|user|users|system|actor|admin|customer|when|if|given|"
+    r"kullanici|kullanıcı|sistem|zorunlu|gerekir|gerekmeli|izin|destek|dogrula|doğrula|"
+    r"goster|göster|engelle|yalnizca|yalnızca|maksimum|minimum)\b|"
+    r"\b\w+(?:meli|malı|abilmeli|ebilmeli)\b",
+    re.IGNORECASE,
+)
+
 INPUT_TYPE_GUIDANCE = {
     "requirements": (
         "The input is a structured requirements document. Treat numbered items or REQ-n "
@@ -245,6 +255,26 @@ def validate_requirements(text: str) -> str:
         raise ValueError(f"Requirements must be at least {MIN_REQUIREMENTS_LEN} characters")
     if len(cleaned) > MAX_REQUIREMENTS_LEN:
         raise ValueError(f"Requirements must not exceed {MAX_REQUIREMENTS_LEN} characters")
+    return cleaned
+
+
+def validate_testable_requirements(text: str) -> str:
+    cleaned = validate_requirements(text)
+    words = re.findall(r"[^\W\d_]+", cleaned, flags=re.UNICODE)
+    normalized_words = [word.casefold() for word in words]
+    letters = "".join(words).casefold()
+    vowels = set("aeiouyıöü")
+
+    if len(words) < 3 or len(set(normalized_words)) < 2:
+        raise ValueError("Input must contain a clear, testable software requirement")
+    if re.search(r"(.)\1{4,}", letters):
+        raise ValueError("Input appears to contain repeated or meaningless characters")
+    if letters and sum(char in vowels for char in letters) / len(letters) < 0.20:
+        raise ValueError("Input appears to be random or unreadable text")
+    if not REQUIREMENT_SIGNAL_PATTERN.search(cleaned):
+        raise ValueError(
+            "Input does not describe a testable requirement or system behavior"
+        )
     return cleaned
 
 
