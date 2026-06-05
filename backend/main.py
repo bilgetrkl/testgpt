@@ -1,17 +1,34 @@
-from fastapi import FastAPI
+from typing import Any
+
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
 from groq import Groq
 from dotenv import load_dotenv
 import os
 
+from database import (
+    authenticate_user,
+    create_token,
+    create_user,
+    get_current_user,
+    init_db,
+    load_sessions,
+    replace_sessions,
+    revoke_token,
+)
+
 load_dotenv()
 
-app = FastAPI()
+app = FastAPI(title="TestGPT API")
+auth_scheme = HTTPBearer(auto_error=False)
+init_db()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -21,12 +38,76 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 class RequirementsInput(BaseModel):
     requirements: str
 
+
+class RegisterInput(BaseModel):
+    name: str = Field(..., min_length=2, max_length=80)
+    email: str = Field(..., min_length=5, max_length=254)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class LoginInput(BaseModel):
+    email: str
+    password: str
+
+
+class SessionsInput(BaseModel):
+    sessions: list[dict[str, Any]] = Field(default_factory=list)
+
 @app.get("/")
 def read_root():
-    return {"status": "TestGPT backend running"}
+    return {"status": "TestGPT backend running", "database": "sqlite"}
+
+
+@app.post("/auth/register", status_code=201)
+def register(data: RegisterInput):
+    if "@" not in data.email or "." not in data.email.rsplit("@", 1)[-1]:
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    try:
+        user = create_user(data.name, data.email, data.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"token": create_token(user["id"]), "user": user}
+
+
+@app.post("/auth/login")
+def login(data: LoginInput):
+    user = authenticate_user(data.email, data.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return {"token": create_token(user["id"]), "user": user}
+
+
+@app.get("/auth/me")
+def auth_me(user: dict[str, Any] = Depends(get_current_user)):
+    return {"user": user}
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(
+    credentials: HTTPAuthorizationCredentials | None = Depends(auth_scheme),
+    user: dict[str, Any] = Depends(get_current_user),
+):
+    del user
+    if credentials:
+        revoke_token(credentials.credentials)
+
+
+@app.get("/sessions")
+def get_sessions(user: dict[str, Any] = Depends(get_current_user)):
+    return {"sessions": load_sessions(user["id"])}
+
+
+@app.put("/sessions")
+def sync_sessions(data: SessionsInput, user: dict[str, Any] = Depends(get_current_user)):
+    replace_sessions(user["id"], data.sessions)
+    return {"saved": len(data.sessions)}
 
 @app.post("/generate")
-def generate_tests(data: RequirementsInput):
+def generate_tests(
+    data: RequirementsInput,
+    user: dict[str, Any] = Depends(get_current_user),
+):
+    del user
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
@@ -73,7 +154,11 @@ class RefinementInput(BaseModel):
     messages: list[dict]
 
 @app.post("/refine")
-def refine_tests(data: RefinementInput):
+def refine_tests(
+    data: RefinementInput,
+    user: dict[str, Any] = Depends(get_current_user),
+):
+    del user
     system_message = {
         "role": "system",
         "content": """You are an expert software tester. Given software requirements and a history of modifications, 

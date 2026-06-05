@@ -19,6 +19,9 @@ backend/.env
 **/*.pyd
 .pytest_cache/
 .ipynb_checkpoints/
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
 
 # Node modules (dependencies)
 frontend/node_modules/
