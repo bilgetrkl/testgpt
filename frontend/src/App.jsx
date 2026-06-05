@@ -21,6 +21,18 @@ import "./App.css"
 
 const API_BASE = "http://localhost:8000"
 
+function authHeaders(extra = {}) {
+  const token = localStorage.getItem("testgpt-auth-token")
+  return { ...extra, ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+}
+
+async function apiFetch(path, options = {}) {
+  return fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: authHeaders(options.headers || {}),
+  })
+}
+
 const INPUT_TYPES = [
   { id: "requirements", label: "Requirements" },
   { id: "use_case", label: "Use Case" },
@@ -321,6 +333,15 @@ function ScenarioCard({
 
 // ── App ───────────────────────────────────────────────────────
 export default function App() {
+  const [user, setUser] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [sessionsHydrated, setSessionsHydrated] = useState(false)
+  const [authMode, setAuthMode] = useState("login")
+  const [authName, setAuthName] = useState("")
+  const [authEmail, setAuthEmail] = useState("")
+  const [authPassword, setAuthPassword] = useState("")
+  const [authError, setAuthError] = useState("")
+  const [authLoading, setAuthLoading] = useState(false)
   const [requirements, setRequirements] = useState("")
   const [inputType, setInputType] = useState("requirements")
   const [loading, setLoading]   = useState(false)
@@ -384,6 +405,103 @@ export default function App() {
     } catch { return false }
   })
 
+  const loadAccountSessions = useCallback(async () => {
+    const response = await apiFetch("/sessions")
+    if (!response.ok) throw new Error("Could not load your saved sessions")
+    const data = await response.json()
+    const remoteSessions = data.sessions || []
+    const localSessions = (() => {
+      try { return JSON.parse(localStorage.getItem("testgpt-sessions") || "[]") }
+      catch { return [] }
+    })()
+    const nextSessions = remoteSessions.length > 0 ? remoteSessions : localSessions
+
+    if (remoteSessions.length === 0 && localSessions.length > 0) {
+      await apiFetch("/sessions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessions: localSessions }),
+      })
+    }
+
+    setSessions(nextSessions)
+    setSidebarOpen(nextSessions.length > 0)
+    const storedActiveId = Number(localStorage.getItem("testgpt-active-id"))
+    const nextActive = nextSessions.find(s => Number(s.id) === storedActiveId) || nextSessions[0]
+    setActiveId(nextActive?.id ?? null)
+    if (nextActive) {
+      setRequirements(nextActive.requirements || "")
+      setInputType(nextActive.inputType || "requirements")
+      setResult(nextActive.result || "")
+    } else {
+      setRequirements("")
+      setResult("")
+    }
+    setSessionsHydrated(true)
+  }, [])
+
+  useEffect(() => {
+    const restoreAccount = async () => {
+      const token = localStorage.getItem("testgpt-auth-token")
+      if (!token) {
+        setAuthReady(true)
+        return
+      }
+      try {
+        const response = await apiFetch("/auth/me")
+        if (!response.ok) throw new Error("Session expired")
+        const data = await response.json()
+        setUser(data.user)
+        await loadAccountSessions()
+      } catch {
+        localStorage.removeItem("testgpt-auth-token")
+        setUser(null)
+      } finally {
+        setAuthReady(true)
+      }
+    }
+    restoreAccount()
+  }, [loadAccountSessions])
+
+  const handleAuthSubmit = async (event) => {
+    event.preventDefault()
+    setAuthLoading(true)
+    setAuthError("")
+    try {
+      const response = await fetch(`${API_BASE}/auth/${authMode === "register" ? "register" : "login"}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(authMode === "register" ? { name: authName.trim() } : {}),
+          email: authEmail.trim(),
+          password: authPassword,
+        }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || "Authentication failed")
+      localStorage.setItem("testgpt-auth-token", data.token)
+      setUser(data.user)
+      await loadAccountSessions()
+    } catch (err) {
+      setAuthError(err.message || "Authentication failed")
+    } finally {
+      setAuthLoading(false)
+      setAuthReady(true)
+    }
+  }
+
+  const handleLogout = async () => {
+    try { await apiFetch("/auth/logout", { method: "POST" }) } catch { /* local logout still works */ }
+    localStorage.removeItem("testgpt-auth-token")
+    localStorage.removeItem("testgpt-active-id")
+    setUser(null)
+    setSessions([])
+    setActiveId(null)
+    setRequirements("")
+    setResult("")
+    setSessionsHydrated(false)
+  }
+
   // Derived state (2.8 / 5.6)
   const activeSession = sessions.find(s => s.id === activeId)
   const activeVersionIdx = activeSession ? (activeSession.activeVersionIndex || 0) : 0
@@ -400,6 +518,18 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("testgpt-sessions", JSON.stringify(sessions))
   }, [sessions])
+
+  useEffect(() => {
+    if (!user || !sessionsHydrated) return
+    const timer = window.setTimeout(() => {
+      apiFetch("/sessions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessions }),
+      }).catch(() => {})
+    }, 500)
+    return () => window.clearTimeout(timer)
+  }, [sessions, sessionsHydrated, user])
 
   useEffect(() => {
     if (activeId) localStorage.setItem("testgpt-active-id", activeId)
@@ -635,7 +765,7 @@ export default function App() {
     ]
 
     try {
-      const res = await fetch(`${API_BASE}/refine`, {
+      const res = await apiFetch("/refine", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: updatedMessages }),
@@ -691,7 +821,7 @@ export default function App() {
     const sanitized = sanitizeInput(rawInput)
     setAnalyzeLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/analyze`, {
+      const res = await apiFetch("/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requirements: sanitized, inputType }),
@@ -752,7 +882,7 @@ export default function App() {
 
     setImproveLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/improve-requirements`, {
+      const res = await apiFetch("/improve-requirements", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requirements: sanitized, warnings: warningsToFix }),
@@ -790,7 +920,7 @@ export default function App() {
 
     setCoverageReviewLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/coverage-review`, {
+      const res = await apiFetch("/coverage-review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -828,7 +958,7 @@ export default function App() {
       return
     }
     try {
-      const res = await fetch(`${API_BASE}/change-impact`, {
+      const res = await apiFetch("/change-impact", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -926,7 +1056,7 @@ export default function App() {
       let generatedText = ""
 
       if (useStreaming) {
-        const res = await fetch(`${API_BASE}/generate/stream`, {
+        const res = await apiFetch("/generate/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ requirements: sanitized, inputType }),
@@ -954,7 +1084,7 @@ export default function App() {
         }
         generatedText = generatedText.replace(/```[\s\S]*?```/g, "").trim()
       } else {
-        const res = await fetch(`${API_BASE}/generate`, {
+        const res = await apiFetch("/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ requirements: sanitized, inputType }),
@@ -1165,6 +1295,62 @@ export default function App() {
     }
   }
 
+  if (!authReady) {
+    return <div className="auth-loading">Loading TestGPT...</div>
+  }
+
+  if (!user) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-intro">
+          <span className="auth-kicker">AI acceptance testing workspace</span>
+          <h1>TestGPT</h1>
+          <p>Turn software requirements into traceable Gherkin scenarios, refine them with AI, and keep every session in your account.</p>
+          <div className="auth-points" aria-label="Product highlights">
+            <span>Requirement traceability</span>
+            <span>Version history</span>
+            <span>SQLite persistence</span>
+          </div>
+        </section>
+
+        <section className="auth-panel" aria-labelledby="auth-title">
+          <div className="auth-mode" role="tablist" aria-label="Authentication mode">
+            <button type="button" className={authMode === "login" ? "active" : ""} onClick={() => { setAuthMode("login"); setAuthError("") }}>
+              Sign in
+            </button>
+            <button type="button" className={authMode === "register" ? "active" : ""} onClick={() => { setAuthMode("register"); setAuthError("") }}>
+              Create account
+            </button>
+          </div>
+          <h2 id="auth-title">{authMode === "login" ? "Welcome back" : "Create your workspace"}</h2>
+          <p className="auth-subtitle">
+            {authMode === "login" ? "Sign in to access your saved test sessions." : "Your generated tests will be saved to SQLite automatically."}
+          </p>
+          <form className="auth-form" onSubmit={handleAuthSubmit}>
+            {authMode === "register" && (
+              <label>
+                Name
+                <input value={authName} onChange={e => setAuthName(e.target.value)} minLength={2} maxLength={80} autoComplete="name" required />
+              </label>
+            )}
+            <label>
+              Email
+              <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} autoComplete="email" required />
+            </label>
+            <label>
+              Password
+              <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} minLength={8} maxLength={128} autoComplete={authMode === "login" ? "current-password" : "new-password"} required />
+            </label>
+            {authError && <p className="auth-error" role="alert">{authError}</p>}
+            <button className="btn btn-primary auth-submit" disabled={authLoading}>
+              {authLoading ? "Please wait..." : authMode === "login" ? "Sign in" : "Create account"}
+            </button>
+          </form>
+        </section>
+      </main>
+    )
+  }
+
   return (
     <div className="app">
       {/* ── Navbar ── */}
@@ -1185,6 +1371,7 @@ export default function App() {
           )}
         </div>
         <div className="navbar-actions">
+          <span className="account-name">{user.name}</span>
           {result && (
             <>
               <button className="btn btn-ghost" onClick={handleCopy}>
@@ -1203,6 +1390,7 @@ export default function App() {
           >
             {theme === "dark" ? "Light" : "Dark"}
           </button>
+          <button className="btn btn-ghost" onClick={handleLogout}>Sign out</button>
         </div>
       </nav>
 

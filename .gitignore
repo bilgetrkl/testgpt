@@ -16,3 +16,6 @@ frontend/dist/
 # OS / IDE
 .DS_Store
 *.log
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal

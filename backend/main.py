@@ -5,9 +5,10 @@ import time
 from collections import defaultdict
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from ai_utils import (
@@ -24,8 +25,20 @@ from ai_utils import (
     parse_json_response,
     validate_requirements,
 )
+from database import (
+    authenticate_user,
+    create_token,
+    create_user,
+    get_current_user,
+    init_db,
+    load_sessions,
+    replace_sessions,
+    revoke_token,
+)
 
 app = FastAPI(title="TestGPT API")
+auth_scheme = HTTPBearer(auto_error=False)
+init_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -86,9 +99,69 @@ class ImproveRequirementsInput(BaseModel):
     warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class RegisterInput(BaseModel):
+    name: str = Field(..., min_length=2, max_length=80)
+    email: str = Field(..., min_length=5, max_length=254)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class LoginInput(BaseModel):
+    email: str
+    password: str
+
+
+class SessionsInput(BaseModel):
+    sessions: list[dict[str, Any]] = Field(default_factory=list)
+
+
 @app.get("/")
 def read_root():
-    return {"status": "TestGPT backend running", "version": "1.1.0"}
+    return {"status": "TestGPT backend running", "version": "1.1.0", "database": "sqlite"}
+
+
+@app.post("/auth/register", status_code=201)
+def register(data: RegisterInput):
+    if "@" not in data.email or "." not in data.email.rsplit("@", 1)[-1]:
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    try:
+        user = create_user(data.name, data.email, data.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"token": create_token(user["id"]), "user": user}
+
+
+@app.post("/auth/login")
+def login(data: LoginInput):
+    user = authenticate_user(data.email, data.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return {"token": create_token(user["id"]), "user": user}
+
+
+@app.get("/auth/me")
+def auth_me(user: dict[str, Any] = Depends(get_current_user)):
+    return {"user": user}
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(
+    credentials: HTTPAuthorizationCredentials | None = Depends(auth_scheme),
+    user: dict[str, Any] = Depends(get_current_user),
+):
+    del user
+    if credentials:
+        revoke_token(credentials.credentials)
+
+
+@app.get("/sessions")
+def get_sessions(user: dict[str, Any] = Depends(get_current_user)):
+    return {"sessions": load_sessions(user["id"])}
+
+
+@app.put("/sessions")
+def sync_sessions(data: SessionsInput, user: dict[str, Any] = Depends(get_current_user)):
+    replace_sessions(user["id"], data.sessions)
+    return {"saved": len(data.sessions)}
 
 
 def _normalize_analysis(parsed: dict) -> dict:
@@ -133,8 +206,8 @@ def _generation_user_message(text: str, input_type: str) -> str:
 
 
 @app.post("/analyze")
-def analyze_requirements(data: RequirementsInput, request: Request):
-    _check_rate_limit(_client_id(request))
+def analyze_requirements(data: RequirementsInput, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+    _check_rate_limit(f"user:{user['id']}")
     try:
         text = validate_requirements(data.requirements)
     except ValueError as exc:
@@ -169,8 +242,8 @@ def analyze_requirements(data: RequirementsInput, request: Request):
 
 
 @app.post("/improve-requirements")
-def improve_requirements(data: ImproveRequirementsInput, request: Request):
-    _check_rate_limit(_client_id(request))
+def improve_requirements(data: ImproveRequirementsInput, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+    _check_rate_limit(f"user:{user['id']}")
     try:
         text = validate_requirements(data.requirements)
     except ValueError as exc:
@@ -216,8 +289,8 @@ def improve_requirements(data: ImproveRequirementsInput, request: Request):
 
 
 @app.post("/change-impact")
-def change_impact(data: ChangeImpactInput, request: Request):
-    _check_rate_limit(_client_id(request))
+def change_impact(data: ChangeImpactInput, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+    _check_rate_limit(f"user:{user['id']}")
     try:
         old_t = validate_requirements(data.oldRequirements)
         new_t = validate_requirements(data.newRequirements)
@@ -243,8 +316,8 @@ def change_impact(data: ChangeImpactInput, request: Request):
 
 
 @app.post("/coverage-review")
-def coverage_review(data: CoverageReviewInput, request: Request):
-    _check_rate_limit(_client_id(request))
+def coverage_review(data: CoverageReviewInput, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+    _check_rate_limit(f"user:{user['id']}")
     try:
         req_text = validate_requirements(data.requirements)
         gherkin = (data.gherkin or "").strip()
@@ -298,8 +371,8 @@ def coverage_review(data: CoverageReviewInput, request: Request):
 
 
 @app.post("/generate")
-def generate_tests(data: RequirementsInput, request: Request):
-    _check_rate_limit(_client_id(request))
+def generate_tests(data: RequirementsInput, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+    _check_rate_limit(f"user:{user['id']}")
     try:
         text = validate_requirements(data.requirements)
     except ValueError as exc:
@@ -324,8 +397,8 @@ def generate_tests(data: RequirementsInput, request: Request):
 
 
 @app.post("/generate/stream")
-def generate_tests_stream(data: RequirementsInput, request: Request):
-    _check_rate_limit(_client_id(request))
+def generate_tests_stream(data: RequirementsInput, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+    _check_rate_limit(f"user:{user['id']}")
     try:
         text = validate_requirements(data.requirements)
     except ValueError as exc:
@@ -355,8 +428,8 @@ def generate_tests_stream(data: RequirementsInput, request: Request):
 
 
 @app.post("/refine")
-def refine_tests(data: RefinementInput, request: Request):
-    _check_rate_limit(_client_id(request))
+def refine_tests(data: RefinementInput, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+    _check_rate_limit(f"user:{user['id']}")
     if not data.messages:
         raise HTTPException(status_code=400, detail="messages array is required")
 
